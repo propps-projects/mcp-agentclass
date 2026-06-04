@@ -84,11 +84,18 @@ export function buildServer(adapterMode: AdapterMode = "mcpApps"): McpServer {
   // ChatGPT honors `frameDomains` so the iframe to Panda works there.
   // Claude hardcodes `frame-src 'self' blob: data:` (see anthropics/
   // claude-ai-mcp #54 — closed "not planned"), so we can't iframe out;
-  // try <video> + hls.js (MediaSource Extensions) instead, which only
-  // depends on connect-src (we whitelist Panda there) and media-src
-  // allowing blob: (TBD whether Claude does).
+  // <video> + hls.js (MediaSource Extensions) works because Claude's
+  // media-src allows blob: and our connect_domains whitelists Panda.
+  //
+  // GPT_USE_VIDEO=true experimental flag: try the <video> path on the
+  // ChatGPT endpoint too. Used to validate whether ChatGPT's media-src
+  // CSP — which is NOT configurable via _meta.ui.csp — has become more
+  // permissive since the last test. If it works, we eliminate the iframe
+  // path entirely and remove the OpenAI submission risk (iframes get
+  // "extra manual review and are often not approved").
+  const gptUseVideo = process.env.GPT_USE_VIDEO === "true";
   const widgetHtml = adapterMode === "appsSdk"
-    ? buildPlayerWidgetHtml()
+    ? (gptUseVideo ? buildPlayerWidgetHtmlVideo() : buildPlayerWidgetHtml())
     : buildPlayerWidgetHtmlVideo();
   const widgetWrapped = createUIResource({
     uri: PLAYER_WIDGET_URI,
