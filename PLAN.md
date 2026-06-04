@@ -365,16 +365,32 @@ Implementação: token bucket no Redis. Header `Retry-After` quando estoura.
 - [ ] `_meta.ui.csp` completo (já temos)
 - [ ] **Decisão de player no ChatGPT** (iframe vs `<video>` HTML5 — ver experimento abaixo)
 
-**Decisão de player no ChatGPT (`<video>` vs `<iframe>` — RISCO DE REJEIÇÃO):**
+**Decisão de player no ChatGPT (`<video>` vs `<iframe>` — RESOLVIDO):**
 
-OpenAI explícita: *"Apps using iframes receive extra manual review and are often not approved for broad distribution"*. Nosso ChatGPT path hoje usa iframe.
+OpenAI explícita: *"Apps using iframes receive extra manual review and are often not approved for broad distribution"*. Nosso ChatGPT path usa iframe pro Panda.
 
-**Plano de mitigação:**
+**Resultado do experimento** (`GPT_USE_VIDEO=true` no commit `cf73979`):
 
-1. **Re-testar `<video>` + hls.js no ChatGPT** com a CSP no lugar certo (`contents[]._meta.ui.csp`, que só implementamos depois dos testes originais)
-2. Implementar como feature flag `GPT_USE_VIDEO=true|false` no env (default = iframe, current)
-3. Se `<video>` funcionar: trocamos pra ele na submissão e eliminamos o risco
-4. Se não funcionar: submetemos com iframe + justificativa "vídeo educacional é core" (caso Coursera/YouTube serve de referência)
+Testamos `<video>` + hls.js + MSE no /mcp-gpt com CSP no lugar correto. Console retornou:
+
+```
+Loading media from 'blob: ...web-sandbox.oaiusercontent.com/...'
+violates "media-src 'self' ... *.tv.pandavideo.com.br cdn.pandavideo.com".
+```
+
+- ✅ Boa: nossos `connectDomains`/`resourceDomains` propagaram pra `media-src` (Panda apareceu na lista)
+- ❌ Ruim: o scheme `blob:` (criado por MSE) **não é configurável** via _meta — não há chave pra adicionar schemes em CSP
+
+**Decisão final: manter iframe no ChatGPT.** `GPT_USE_VIDEO=false` (default).
+
+**Estratégia de submissão pro Apps Directory:**
+
+Argumentação "iframe é core" — apoiada em:
+
+1. **Conteúdo educacional em vídeo IS o core do produto** (igual Coursera, que passou)
+2. **Player nativo do Panda preserva features essenciais:** DRM, analytics, watermark, captura real de progresso, qualidade adaptativa — tirar isso degrada produto
+3. **Não há alternativa técnica:** ChatGPT impede `<video>` HTML5 pra fontes externas (blob: bloqueado em media-src, scheme não configurável)
+4. **Precedente forte:** Coursera, YouTube, Spotify, Vimeo no Apps Directory todos com iframe pra player próprio
 
 **Conta demo permanente (obrigatória pra reviewers):**
 
