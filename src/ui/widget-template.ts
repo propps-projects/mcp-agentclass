@@ -81,16 +81,22 @@ export function buildPlayerWidgetHtml(): string {
         subEl.textContent = data.startSec ? ('Iniciando em ' + fmtTime(data.startSec)) : '';
         var start = Number(data.startSec) || 0;
         function seekStart() { if (start > 0) { try { v.currentTime = start; } catch (e) {} } }
-        if (v.canPlayType('application/vnd.apple.mpegurl')) {
-          v.src = data.hlsUrl;
-          v.addEventListener('loadedmetadata', seekStart, { once: true });
-        } else if (window.Hls && Hls.isSupported()) {
+        // Prefer hls.js for ALL browsers: it feeds <video> via MediaSource
+        // Extensions (blob: URL), which CSP allows. Setting video.src to
+        // the HLS URL directly triggers media-src CSP, which Apps SDK
+        // does NOT expose as a configurable directive.
+        if (window.Hls && Hls.isSupported()) {
           var hls = new Hls({ startPosition: start || -1 });
           hls.loadSource(data.hlsUrl);
           hls.attachMedia(v);
           hls.on(Hls.Events.ERROR, function(_, d) {
             if (d && d.fatal) show(msg, 'Erro ao carregar o vídeo: ' + (d.details || d.type), true);
           });
+        } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+          // Safari native HLS fallback. Inside Apps SDK CSP this will be
+          // blocked (no way to whitelist media-src); outside Apps SDK it's fine.
+          v.src = data.hlsUrl;
+          v.addEventListener('loadedmetadata', seekStart, { once: true });
         } else {
           show(msg, 'Seu navegador não suporta HLS playback.', true);
         }
