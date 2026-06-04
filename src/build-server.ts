@@ -66,6 +66,10 @@ export function buildServer(adapterMode: AdapterMode = "mcpApps"): McpServer {
           "openai/widgetDescription": "Player de vídeo HTML5 + HLS que toca uma aula do curso, com deep-link opcional para timestamp.",
           // Legacy CSP key REQUIRES snake_case sub-keys. ChatGPT silently
           // ignores camelCase here and flags the widget as "CSP não definida".
+          // media_domains / blob:/data: scheme entries are an attempt to
+          // unblock <video> playback inside the Apps SDK iframe — the docs
+          // only list connect/resource/frame/redirect, but ChatGPT may
+          // honor more if present.
           "openai/widgetCSP": {
             connect_domains: [
               "https://*.tv.pandavideo.com.br",
@@ -78,8 +82,37 @@ export function buildServer(adapterMode: AdapterMode = "mcpApps"): McpServer {
               "https://cdn.pandavideo.com",
               "https://b-vz-e2643eed-ceb.tv.pandavideo.com.br",
             ],
+            media_domains: [
+              "blob:",
+              "data:",
+              "https://*.tv.pandavideo.com.br",
+              "https://cdn.pandavideo.com",
+              "https://b-vz-e2643eed-ceb.tv.pandavideo.com.br",
+            ],
             frame_domains: [],
             redirect_domains: [],
+          },
+          // Also try the standard `_meta.ui.csp` shape (camelCase) — some
+          // hosts read this instead of the legacy widgetCSP.
+          ui: {
+            csp: {
+              connectDomains: [
+                "https://*.tv.pandavideo.com.br",
+                "https://cdn.pandavideo.com",
+                "https://b-vz-e2643eed-ceb.tv.pandavideo.com.br",
+              ],
+              resourceDomains: [
+                "https://*.tv.pandavideo.com.br",
+                "https://cdn.pandavideo.com",
+              ],
+              mediaDomains: [
+                "blob:",
+                "data:",
+                "https://*.tv.pandavideo.com.br",
+                "https://cdn.pandavideo.com",
+              ],
+              frameDomains: [],
+            },
           },
           ...(widgetDomain ? { "openai/widgetDomain": widgetDomain } : {}),
         },
