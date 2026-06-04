@@ -34,7 +34,7 @@
 | Cache + queue | Redis (Upstash) | BullMQ jobs, rate limit, sessions |
 | Object storage | Supabase Storage ou Cloudflare R2 | áudios temp + KB materials (PDFs) |
 | Auth | OAuth 2.0 próprio (sobre Supabase Auth) + magic link | Claude/GPT exigem OAuth; magic link p/ UX leve |
-| **Pagamento** | **AbacatePay** | PIX-first, recorrência via PIX, fees baixas, BR-native |
+| **Pagamento** | **ValidaPay** | PIX Automático + cartão + outros métodos (aceita qualquer formato via webhook). API REST + OAuth2. Subcontas + Split nativos (caminho fácil pra modelo marketplace no futuro) |
 | Background jobs | BullMQ sobre Redis | ingest assíncrono, retry, dashboard de jobs |
 | Transcrição | OpenAI Whisper API (`whisper-1`) | igual hoje — pt-BR funciona bem |
 | Embeddings | `Xenova/multilingual-e5-small` local | igual hoje — zero custo runtime |
@@ -50,7 +50,7 @@
 -- Multi-tenant
 tenants(id, name, email, slug, plan_id, status, trial_ends_at,
         panda_api_key_enc, hotmart_app_token_enc, hotmart_basic_token_enc,
-        abacatepay_customer_id, created_at)
+        validapay_customer_id, created_at)
 
 -- Catálogo de cursos por tenant
 courses(id, tenant_id, name, source_type ENUM('panda','vimeo',...),
@@ -143,7 +143,7 @@ rate_limit_buckets(key TEXT, window_start TIMESTAMPTZ, count INT)
 | Supabase shared | ~R$ 5 |
 | Storage R2 (100 MB KB) | ~R$ 0,10 |
 | Compute (Fly shared) | ~R$ 3 |
-| AbacatePay fee (~1,5% PIX) | ~R$ 1,50 |
+| ValidaPay fee (~1,5% PIX) | ~R$ 1,50 |
 | **Total custo** | **~R$ 30** |
 | **Margem bruta** | **~70% (R$ 69)** |
 
@@ -155,7 +155,7 @@ rate_limit_buckets(key TEXT, window_start TIMESTAMPTZ, count INT)
 | Supabase Pro slice | ~R$ 15 |
 | Storage R2 (500 MB) | ~R$ 0,50 |
 | Compute | ~R$ 10 |
-| AbacatePay fee | ~R$ 4,50 |
+| ValidaPay fee | ~R$ 4,50 |
 | **Total custo** | **~R$ 150** |
 | **Margem bruta** | **~50% (R$ 149)** |
 
@@ -167,7 +167,7 @@ rate_limit_buckets(key TEXT, window_start TIMESTAMPTZ, count INT)
 | Supabase Pro maior | ~R$ 50 |
 | Storage R2 (2 GB) | ~R$ 2 |
 | Compute (dedicated) | ~R$ 30 |
-| AbacatePay fee | ~R$ 15 |
+| ValidaPay fee | ~R$ 15 |
 | **Total custo** | **~R$ 500** |
 | **Margem bruta** | **~50% (R$ 499)** |
 
@@ -288,7 +288,7 @@ Implementação: token bucket no Redis. Header `Retry-After` quando estoura.
 
 **Entregável:** novos clientes onboardam sem você no loop pro ingest.
 
-### Fase 3 — Tiers + Billing AbacatePay (2 semanas)
+### Fase 3 — Tiers + Billing ValidaPay (2 semanas)
 
 **Goal:** assinatura recorrente automática, cota enforced, overage cobrado.
 
@@ -299,12 +299,17 @@ Implementação: token bucket no Redis. Header `Retry-After` quando estoura.
   - `enforceQuota(tenant, 'transcribe', estimatedMinutes)` → projetar mês corrente
   - `enforceQuota(tenant, 'add_student')` → check active_students count
   - `enforceQuota(tenant, 'upload_kb', sizeBytes)` → check current KB total
-- AbacatePay integration:
-  - Criar Customer ao signup
-  - Plan (PIX recorrente via cobrança mensal por venc.)
-  - Webhook `payment.confirmed` → estende `subscription_active_until`
-  - Webhook `payment.failed` → grace 7 dias → auto-suspend
-  - Trial 14 dias Starter ao signup
+- ValidaPay integration:
+  - **Auth OAuth2 Bearer**: client_credentials grant pra obter token de servidor → refresh quando expira
+  - Sandbox: `https://sandbox.validapay.com.br`
+  - Produção: `https://api.validapay.com.br`
+  - **Múltiplos métodos de pagamento** disponíveis: PIX Automático (recorrência nativa), cartão de crédito, e outros — ValidaPay aceita qualquer formato via webhook
+  - Checkout no signup oferece: PIX Automático (default, sem fricção) e cartão recorrente (opção)
+  - **Webhook flexível**: ValidaPay envia qualquer schema de payload que a gente configurar — modelamos eventos no nosso shape
+  - Eventos críticos a tratar (nomes internos nossos): pagamento confirmado, pagamento falhou, assinatura cancelada, assinatura expirou
+  - Pagamento confirmado → estende `subscription_active_until` + atualiza `usage_events`
+  - Pagamento falhou → grace 7 dias → auto-suspend (`tenant.status = 'suspended'`)
+  - Trial 14 dias Starter ao signup (com método já cadastrado no fim do trial pra cobrar automaticamente)
 - Overage tracking → cobrança extra no fim do mês
 - Dashboard de uso (gauge real-time: 3/10 cursos, 8.5/10h transcrição, etc)
 - Página de pricing pública + upgrade fluxo
@@ -404,7 +409,7 @@ Argumentação "iframe é core" — apoiada em:
 **Legal & Negócio (obrigatórios):**
 
 - [ ] CNPJ ativo (vou perguntar se já tem)
-- [ ] **Privacy Policy** em `askine.com.br/privacidade` cobrindo: categorias de dados, propósitos, recipients (Supabase, AbacatePay, OpenAI, Anthropic, Hotmart), retention, controles do usuário (LGPD-compliant)
+- [ ] **Privacy Policy** em `askine.com.br/privacidade` cobrindo: categorias de dados, propósitos, recipients (Supabase, ValidaPay, OpenAI, Anthropic, Hotmart), retention, controles do usuário (LGPD-compliant)
 - [ ] **Terms of Service** em `askine.com.br/termos`
 - [ ] **Customer support contact** publicado (`suporte@askine.com.br` ou similar) com tempo de resposta declarado
 - [ ] Project OpenAI com **global data residency** (NÃO EU — projetos EU não podem submeter)
@@ -478,7 +483,8 @@ interface VideoSourceAdapter {
 - [ ] **Logo + identidade visual:** em criação
 - [ ] **Termos de Uso + Política de Privacidade:** redigir + publicar em `askine.com.br/legal` (LGPD-compliant; obrigatório p/ submissão OpenAI + Anthropic)
 - [ ] **Emissão de NF:** integrar com emissor (ex: NFE.io, eNotas) pra automatizar — antes do primeiro pagamento confirmado
-- [ ] **Conta bancária PJ + Pix CNPJ:** AbacatePay vai depositar lá
+- [ ] **Conta bancária PJ + Pix CNPJ:** ValidaPay vai depositar lá
+- [ ] **Confirmar fee real do ValidaPay** (assumido ~1,5% PIX na análise de margem — validar antes de fechar pricing)
 
 ---
 
@@ -488,7 +494,7 @@ interface VideoSourceAdapter {
 S1-3   Fase 0 — Fundação multi-tenant
 S4-6   Fase 1 — Auth + Hotmart + 1º cliente   ← já dá pra começar a vender
 S7-9   Fase 2 — Ingest self-service
-S10-11 Fase 3 — Tiers + AbacatePay            ← revenue automática
+S10-11 Fase 3 — Tiers + ValidaPay            ← revenue automática
 S12-13 Fase 4 — Analytics + progresso
 S14-15 Fase 5 — Hardening + scale
 
