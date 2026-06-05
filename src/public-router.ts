@@ -236,6 +236,23 @@ function signupHtml(args: { plans: Array<Pick<PlanPublic, "id" | "name" | "month
   };
   const errMsg = args.error ? errors[args.error] ?? "Erro." : null;
   const usable = args.plans.filter((p) => !!p.validapay_price_id);
+
+  // Friendly empty state when no plan has been synced to ValidaPay yet.
+  if (!usable.length) {
+    return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Em breve — Askine</title>
+<style>${CSS}</style>
+${NAV}
+<main style="max-width:560px">
+  <h1>🚧 Checkout em preparação</h1>
+  <div class="card">
+    <p>Os planos ainda estão sendo configurados no nosso provedor de pagamentos.</p>
+    <p>Volta em alguns minutos ou manda email pra
+       <a href="mailto:rafael@infosaas.co" style="color:#60a5fa">rafael@infosaas.co</a>
+       e eu te coloco manualmente.</p>
+  </div>
+</main>`;
+  }
+
   return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Começar — Askine</title>
 <style>${CSS}</style>
 ${NAV}
