@@ -15,6 +15,7 @@ import { resolveTenantBySlug, type Tenant } from "./lib/tenant.ts";
 import { findStudentById, listAccessibleCourseIds } from "./lib/students.ts";
 import { validateAccessToken } from "./lib/oauth.ts";
 import { matchOAuthRoute, handleOAuthRoute } from "./oauth-router.ts";
+import { matchAdminRoute, handleAdminRoute } from "./admin-router.ts";
 import { processHotmartEvent, verifyHottok, getHotmartHottok } from "./lib/hotmart.ts";
 import type { AdapterMode } from "./ui/player.ts";
 
@@ -210,10 +211,22 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
-    // ---------- Tenant routes (OAuth + MCP) ----------
+    // ---------- Tenant routes (OAuth + admin dashboard + MCP) ----------
     if (route.kind === "tenant") {
       const tenant = await resolveTenantBySlug(route.tenantSlug);
       if (!tenant) { res.writeHead(404).end("tenant not found"); return; }
+
+      // Admin dashboard: /t/:slug/admin/*
+      if (route.suffix === "/admin" || route.suffix.startsWith("/admin/")) {
+        const adminSuffix = route.suffix === "/admin" ? "" : route.suffix.slice("/admin".length);
+        const adminMatch = matchAdminRoute(adminSuffix, req.method ?? "GET");
+        if (adminMatch) {
+          await handleAdminRoute(adminMatch, tenant, req, res);
+          return;
+        }
+        res.writeHead(404).end("admin route not found");
+        return;
+      }
 
       // OAuth + magic-link routes scoped under /t/:slug/
       const oauthMatch = matchOAuthRoute(route.suffix, req.method ?? "GET");
@@ -285,4 +298,5 @@ httpServer.listen(PORT, () => {
   console.error(`  AS discovery (RFC 8414): /.well-known/oauth-authorization-server/t/:slug`);
   console.error(`  PRM discovery (RFC 9728): /.well-known/oauth-protected-resource/t/:slug/{mcp,mcp-gpt}`);
   console.error(`  Hotmart webhook:      /webhooks/hotmart/:slug`);
+  console.error(`  Admin dashboard:      /t/:slug/admin (login → /t/:slug/admin/login)`);
 });

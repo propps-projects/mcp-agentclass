@@ -16,7 +16,7 @@ import { randomToken, sha256, MAGIC_LINK_TTL_SEC } from "./oauth.ts";
 export interface MagicLinkClaims {
   tenantId: string;
   email: string;
-  intent: "oauth_login" | "dashboard";
+  intent: "oauth_login" | "admin_login" | "dashboard";
   /** Resumes the OAuth /authorize flow after click. JSON-encoded; opaque to
    *  the magic-links subsystem. */
   oauthState: string | null;
