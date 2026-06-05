@@ -11,17 +11,48 @@ import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { buildServer } from "./build-server.ts";
+import { resolveTenantBySlug, type Tenant } from "./lib/tenant.ts";
+import type { AdapterMode } from "./ui/player.ts";
 
 const PORT = Number(process.env.PORT || 3333);
-// Two endpoints share the same tools but use different MCP-UI adapters:
-//   /mcp     → mcpApps adapter (text/html;profile=mcp-app) for Claude clients
-//   /mcp-gpt → appsSdk adapter (text/html+skybridge)       for ChatGPT Apps SDK
-const ENDPOINTS = {
-  "/mcp": "mcpApps" as const,
-  "/mcp-gpt": "appsSdk" as const,
+
+// Path → adapter mode map. Each session lives at one of these paths; the
+// adapter determines MCP-UI MIME type emitted by play_lesson.
+//
+//   /mcp           → mcpApps  (Claude)         — legacy single-tenant
+//   /mcp-gpt       → appsSdk  (ChatGPT)        — legacy single-tenant
+//   /t/:slug/mcp     → mcpApps + resolved tenant
+//   /t/:slug/mcp-gpt → appsSdk + resolved tenant
+const ENDPOINT_SUFFIXES = {
+  "/mcp": "mcpApps" as AdapterMode,
+  "/mcp-gpt": "appsSdk" as AdapterMode,
 };
+type RouteMatch = { adapterMode: AdapterMode; tenantSlug: string | null };
+
+function matchRoute(url: string): RouteMatch | null {
+  // Strip query string first
+  const pathOnly = url.split("?")[0];
+
+  // Multi-tenant: /t/:slug/<suffix>
+  const tenantMatch = pathOnly.match(/^\/t\/([a-z0-9][a-z0-9-]{0,62})(\/.*)$/i);
+  if (tenantMatch) {
+    const suffix = tenantMatch[2] as keyof typeof ENDPOINT_SUFFIXES;
+    if (suffix in ENDPOINT_SUFFIXES) {
+      return { adapterMode: ENDPOINT_SUFFIXES[suffix], tenantSlug: tenantMatch[1] };
+    }
+    return null;
+  }
+
+  // Legacy single-tenant
+  if (pathOnly in ENDPOINT_SUFFIXES) {
+    return { adapterMode: ENDPOINT_SUFFIXES[pathOnly as keyof typeof ENDPOINT_SUFFIXES], tenantSlug: null };
+  }
+  return null;
+}
+
 // Optional bearer token to gate the endpoint. Required for any public deploy
 // (VPS, Cloudflare, etc.) — Claude.ai sends it via Authorization header.
+// Phase 1 will replace this with real OAuth.
 const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -56,18 +87,24 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
-    // Route by endpoint prefix to pick the MCP-UI adapter for this session.
-    const matchedPath = (Object.keys(ENDPOINTS) as Array<keyof typeof ENDPOINTS>)
-      .find((p) => req.url === p || req.url!.startsWith(p + "?"));
-    if (!req.url || !matchedPath) {
-      res.writeHead(404).end("not found");
-      return;
-    }
-    const adapterMode = ENDPOINTS[matchedPath];
+    if (!req.url) { res.writeHead(404).end("not found"); return; }
+    const route = matchRoute(req.url);
+    if (!route) { res.writeHead(404).end("not found"); return; }
+    const { adapterMode, tenantSlug } = route;
 
     if (AUTH_TOKEN) {
       const got = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
       if (got !== AUTH_TOKEN) return unauthorized(res);
+    }
+
+    // Resolve tenant when present. Suspended/canceled tenants 404
+    // (don't leak existence). Phase 1 swaps the legacy MCP_AUTH_TOKEN
+    // gate above for full OAuth, and this resolution is driven by the
+    // student's access token rather than the URL slug alone.
+    let tenant: Tenant | null = null;
+    if (tenantSlug) {
+      tenant = await resolveTenantBySlug(tenantSlug);
+      if (!tenant) { res.writeHead(404).end("tenant not found"); return; }
     }
 
     const sessionId = (req.headers["mcp-session-id"] as string | undefined)?.toString();
@@ -91,7 +128,7 @@ const httpServer = http.createServer(async (req, res) => {
         transport.onclose = () => {
           if (transport!.sessionId) transports.delete(transport!.sessionId);
         };
-        const server = buildServer(adapterMode);
+        const server = buildServer(adapterMode, tenant);
         await server.connect(transport);
       }
 
@@ -121,6 +158,9 @@ const httpServer = http.createServer(async (req, res) => {
 
 httpServer.listen(PORT, () => {
   const auth = AUTH_TOKEN ? "with bearer auth" : "WITHOUT auth (set MCP_AUTH_TOKEN for public deploys)";
-  const routes = Object.entries(ENDPOINTS).map(([p, m]) => `${p} (${m})`).join(", ");
-  console.error(`agentclass MCP HTTP server listening on :${PORT} — routes: ${routes} ${auth}`);
+  const legacy = Object.entries(ENDPOINT_SUFFIXES).map(([p, m]) => `${p} (${m})`).join(", ");
+  console.error(`askine MCP HTTP server listening on :${PORT}`);
+  console.error(`  Legacy single-tenant: ${legacy}`);
+  console.error(`  Multi-tenant:         /t/:slug/{mcp,mcp-gpt}`);
+  console.error(`  Auth: ${auth}`);
 });

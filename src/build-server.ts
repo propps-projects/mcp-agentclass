@@ -8,6 +8,7 @@ import { embedQuery } from "./lib/embeddings.ts";
 import { type AdapterMode } from "./ui/player.ts";
 import { buildPlayerWidgetHtml } from "./ui/widget-template.ts";
 import { buildPlayerWidgetHtmlVideo } from "./ui/widget-template-video.ts";
+import { type Tenant } from "./lib/tenant.ts";
 
 // ChatGPT Apps SDK widget URI for the lesson player. Registered as an MCP
 // resource on /mcp-gpt; referenced from play_lesson's `openai/outputTemplate`.
@@ -22,11 +23,20 @@ const PLAYER_WIDGET_URI = "ui://widget/lesson-player.html";
  *   - "mcpApps"  → MIME `text/html;profile=mcp-app` (Claude clients)
  *   - "appsSdk"  → MIME `text/html+skybridge`      (ChatGPT Apps SDK)
  *
- * One server instance per session means the choice can vary by endpoint.
+ * `tenant` is the resolved tenant for path-based routing (/t/:slug/mcp).
+ * Null = legacy single-tenant mode (current MVP behavior). Tool handlers
+ * keep reading from local files until Sub-phase 0.3 migrates the data
+ * layer to Postgres.
  */
-export function buildServer(adapterMode: AdapterMode = "mcpApps"): McpServer {
+export function buildServer(
+  adapterMode: AdapterMode = "mcpApps",
+  tenant: Tenant | null = null,
+): McpServer {
   const server = new McpServer(
-    { name: "agentclass", version: "0.1.0" },
+    {
+      name: tenant ? `askine-${tenant.slug}` : "agentclass",
+      version: "0.1.0",
+    },
     {
       capabilities: { tools: {}, resources: {} },
       instructions: [
