@@ -18,6 +18,11 @@ import { matchOAuthRoute, handleOAuthRoute } from "./oauth-router.ts";
 import { matchAdminRoute, handleAdminRoute } from "./admin-router.ts";
 import { matchSuperAdminRoute, handleSuperAdminRoute } from "./super-admin-router.ts";
 import { matchPublicRoute, handlePublicRoute } from "./public-router.ts";
+import { initObservability, captureError } from "./lib/observability.ts";
+
+// Init Sentry before the server starts handling requests so that
+// boot-time errors are also captured.
+initObservability();
 import { processHotmartEvent, verifyHottok, getHotmartHottok } from "./lib/hotmart.ts";
 import { processValidapayEvent } from "./lib/billing.ts";
 import { verifyWebhookSignature } from "./lib/validapay.ts";
@@ -363,6 +368,7 @@ const httpServer = http.createServer(async (req, res) => {
     }
   } catch (err) {
     console.error("Request error:", err);
+    captureError(err, { url: req.url, method: req.method });
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal error" }, id: null }));

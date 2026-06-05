@@ -652,6 +652,10 @@ async function courseInsights(
   );
   const titleByNum = new Map(lessonTitles.filter((l) => l.lesson_number != null).map((l) => [l.lesson_number!, l.title]));
 
+  // Student activity for this course
+  const { getCourseStudentActivity } = await import("./lib/student-progress.ts");
+  const students = await getCourseStudentActivity(tenant.id, course.id);
+
   html(res, 200, layoutHtml({
     title: `Insights — ${course.name}`,
     tenantName: tenant.name,
@@ -668,6 +672,7 @@ async function courseInsights(
       byTool,
       topLessons: topLessons.map((t) => ({ ...t, title: titleByNum.get(t.lessonNumber) ?? "(sem título)" })),
       topQueries,
+      students,
     }),
   }));
 }
@@ -1050,6 +1055,7 @@ function insightsHtml(args: {
   byTool: Record<string, number>;
   topLessons: Array<{ lessonNumber: number; title: string; count: number }>;
   topQueries: Array<{ query: string; count: number }>;
+  students: Array<{ studentId: string; email: string; displayName: string | null; lastActiveAt: string | null; lessonsVisited: number; totalLessons: number }>;
 }): string {
   const maxLessonCount = args.topLessons[0]?.count ?? 1;
   const maxQueryCount = args.topQueries[0]?.count ?? 1;
@@ -1120,6 +1126,29 @@ function insightsHtml(args: {
       </tbody>
     </table>
   `}
+</div>
+
+<div class="card">
+  <h2>Alunos com acesso (${args.students.length})</h2>
+  <p class="help">Lista de alunos com acesso ativo e progresso nas aulas. "Aulas visitadas" = quantas aulas o tutor já tocou pra esse aluno via play_lesson.</p>
+  ${args.students.length === 0 ? "<p class=help>Nenhum aluno com acesso ainda.</p>" : `
+  <table>
+    <thead><tr><th>Aluno</th><th>Última atividade</th><th>Aulas visitadas</th><th></th></tr></thead>
+    <tbody>
+      ${args.students
+        .sort((a, b) => (b.lastActiveAt ?? "").localeCompare(a.lastActiveAt ?? ""))
+        .map((s) => {
+          const pct = s.totalLessons > 0 ? Math.round((s.lessonsVisited / s.totalLessons) * 100) : 0;
+          const last = s.lastActiveAt ? new Date(s.lastActiveAt).toLocaleDateString("pt-BR") : "—";
+          return `<tr>
+            <td>${s.displayName ? `<strong>${esc(s.displayName)}</strong><br>` : ""}<span style="font-size:12px;color:#666">${esc(s.email)}</span></td>
+            <td>${esc(last)}</td>
+            <td><strong>${s.lessonsVisited}</strong> / ${s.totalLessons}</td>
+            <td style="width:30%"><div style="background:#eee;border-radius:4px;height:8px"><div style="background:${pct > 80 ? "#10b981" : pct > 30 ? "#3b82f6" : "#94a3b8"};height:100%;width:${pct}%;border-radius:4px"></div></div></td>
+          </tr>`;
+        }).join("")}
+    </tbody>
+  </table>`}
 </div>
 
 <div class="card">

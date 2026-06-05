@@ -13,6 +13,8 @@ import { resolveCourse, type Course } from "./lib/courses.ts";
 import { listLessonsForCourse, findLessonInCourse, excerptFromTranscript } from "./lib/lessons-pg.ts";
 import { searchChunksForCourse } from "./lib/store-pg.ts";
 import { recordToolCall, recordSearchQuery } from "./lib/analytics.ts";
+import { recordPlayLesson, getProgressForCourse } from "./lib/student-progress.ts";
+import { checkAndCount } from "./lib/rate-limit.ts";
 
 // ChatGPT Apps SDK widget URI for the lesson player. Registered as an MCP
 // resource on /mcp-gpt; referenced from play_lesson's `openai/outputTemplate`.
@@ -253,6 +255,31 @@ export function buildServer(
     });
   }
 
+  /**
+   * Returns null when the call is allowed; returns an MCP isError response
+   * when the student is rate-limited. Tenant-only — legacy single-tenant
+   * MCP sessions are not gated.
+   */
+  async function rateLimitOrError(toolName: string): Promise<
+    { isError: true; content: Array<{ type: "text"; text: string }> } | null
+  > {
+    if (!tenant || !auth.studentId) return null;
+    const r = await checkAndCount({
+      tenantId: tenant.id,
+      studentId: auth.studentId,
+      toolName,
+    });
+    if (r.ok) return null;
+    const mins = Math.ceil(r.retryAfterSec / 60);
+    return {
+      isError: true,
+      content: [{
+        type: "text",
+        text: `Muitas chamadas. Limite de ${r.limit} chamadas de \`${toolName}\` por hora atingido. Tente de novo em ~${mins}min.`,
+      }],
+    };
+  }
+
   server.registerTool(
     "list_lessons",
     {
@@ -273,6 +300,8 @@ export function buildServer(
     },
     async ({ courseSlug }) => {
       const t0 = Date.now();
+      const limited = await rateLimitOrError("list_lessons");
+      if (limited) return limited;
       const ctx = await resolveCourseCtx(courseSlug);
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
@@ -344,6 +373,8 @@ export function buildServer(
     },
     async ({ courseSlug, lessonNumber, lessonId, includeFullTranscript }) => {
       const t0 = Date.now();
+      const limited = await rateLimitOrError("get_lesson");
+      if (limited) return limited;
       const ctx = await resolveCourseCtx(courseSlug);
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
@@ -437,6 +468,8 @@ export function buildServer(
     },
     async ({ courseSlug, query, limit, lessonNumber }) => {
       const t0 = Date.now();
+      const limited = await rateLimitOrError("search_course");
+      if (limited) return limited;
       const ctx = await resolveCourseCtx(courseSlug);
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
@@ -562,6 +595,8 @@ export function buildServer(
     },
     async ({ courseSlug, lessonNumber, lessonId, startSec }) => {
       const t0 = Date.now();
+      const limited = await rateLimitOrError("play_lesson");
+      if (limited) return limited;
       const ctx = await resolveCourseCtx(courseSlug);
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
@@ -617,6 +652,14 @@ export function buildServer(
         output: { lessonNumber: lesson.lessonNumber, startSec: startSec ?? 0 },
         latencyMs: Date.now() - t0,
       });
+      // Track per-student progress on the lesson the agent chose to play.
+      if (tenant && auth.studentId && ctx.mode === "tenant") {
+        recordPlayLesson({
+          studentId: auth.studentId,
+          lessonId: lesson.id,
+          startSec: startSec ?? 0,
+        });
+      }
       return {
         content: [{ type: "text", text: label }],
         structuredContent,
@@ -653,6 +696,8 @@ export function buildServer(
     },
     async ({ courseSlug, lessonNumber, lessonId, startSec, endSec }) => {
       const t0 = Date.now();
+      const limited = await rateLimitOrError("excerpt_transcript");
+      if (limited) return limited;
       const ctx = await resolveCourseCtx(courseSlug);
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
@@ -717,6 +762,8 @@ export function buildServer(
       },
       async () => {
         const t0 = Date.now();
+        const limited = await rateLimitOrError("list_courses");
+        if (limited) return limited;
         const { listCoursesForTenant } = await import("./lib/courses.ts");
         const all = await listCoursesForTenant(tenant.id);
         const accessible = new Set(auth.accessibleCourseIds ?? []);
@@ -740,6 +787,87 @@ export function buildServer(
           content: [{ type: "text", text }],
           structuredContent: {
             courses: courses.map((c) => ({ slug: c.slug, name: c.name, ingestStatus: c.ingestStatus })),
+          },
+        };
+      },
+    );
+
+    // ----- get_my_progress (tenant-only) -----
+    server.registerTool(
+      "get_my_progress",
+      {
+        title: "Meu progresso no curso",
+        description: "Mostra as aulas que você já tocou no chat e onde parou. Use quando o aluno perguntar 'em que aula eu estou?' ou 'o que já vi?'.",
+        inputSchema: { courseSlug: courseSlugField },
+        outputSchema: {
+          courseName: z.string(),
+          totalLessons: z.number(),
+          visitedLessons: z.number(),
+          completionPct: z.number(),
+          lessons: z.array(z.object({
+            lessonNumber: z.number().nullable(),
+            title: z.string(),
+            visited: z.boolean(),
+            lastPositionSec: z.number(),
+            completed: z.boolean(),
+          })),
+        },
+        annotations: readOnlyAnnotations,
+      },
+      async ({ courseSlug }) => {
+        const t0 = Date.now();
+        const limited = await rateLimitOrError("get_my_progress");
+        if (limited) return limited;
+        const ctx = await resolveCourseCtx(courseSlug);
+        if (ctx.mode !== "tenant") {
+          return { isError: true, content: [{ type: "text", text: ctx.mode === "error" ? ctx.message : "Progresso só disponível em sessões autenticadas." }] };
+        }
+        if (!auth.studentId) {
+          return { isError: true, content: [{ type: "text", text: "Sessão sem autenticação — não consigo recuperar seu progresso." }] };
+        }
+
+        const [allLessons, progressRows] = await Promise.all([
+          listLessonsForCourse(ctx.course.id),
+          getProgressForCourse(auth.studentId, ctx.course.id),
+        ]);
+        const progressById = new Map(progressRows.map((p) => [p.lessonId, p]));
+        const lessonsOut = allLessons.map((l) => {
+          const p = progressById.get(l.id);
+          return {
+            lessonNumber: l.lessonNumber,
+            title: l.title,
+            visited: !!p,
+            lastPositionSec: p?.lastPositionSec ?? 0,
+            completed: !!p?.completedAt,
+          };
+        });
+        const visitedCount = lessonsOut.filter((l) => l.visited).length;
+        const pct = allLessons.length ? Math.round((visitedCount / allLessons.length) * 100) : 0;
+        const body =
+          `# Seu progresso em ${ctx.course.name}\n\n` +
+          `Visitadas: **${visitedCount} de ${allLessons.length}** (${pct}%)\n\n` +
+          lessonsOut.map((l) => {
+            const mark = l.completed ? "✅" : l.visited ? "▶" : "—";
+            const pos = l.visited && l.lastPositionSec > 0
+              ? ` (último ponto: ${formatTimestamp(l.lastPositionSec)})` : "";
+            return `${mark} ${String(l.lessonNumber ?? "?").padStart(2, "0")}. ${l.title}${pos}`;
+          }).join("\n");
+
+        logTool({
+          toolName: "get_my_progress",
+          input: { courseSlug },
+          courseId: ctx.course.id,
+          output: { visitedCount, pct },
+          latencyMs: Date.now() - t0,
+        });
+        return {
+          content: [{ type: "text", text: body }],
+          structuredContent: {
+            courseName: ctx.course.name,
+            totalLessons: allLessons.length,
+            visitedLessons: visitedCount,
+            completionPct: pct,
+            lessons: lessonsOut,
           },
         };
       },

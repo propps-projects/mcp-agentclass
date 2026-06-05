@@ -26,6 +26,7 @@
     "@huggingface/transformers": "^3.0.0",
     "@mcp-ui/server": "^5.0.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@sentry/node": "^10.56.0",
     "better-sqlite3": "^11.0.0",
     "busboy": "^1.6.0",
     "dotenv": "^16.4.0",
