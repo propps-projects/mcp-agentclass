@@ -12,7 +12,10 @@
     "ingest:all": "npm run ingest:1-fetch && npm run ingest:2-audio && npm run ingest:3-transcribe && npm run ingest:4-index",
     "server": "tsx src/server.ts",
     "server:http": "tsx src/server-http.ts",
-    "inspect": "npx @modelcontextprotocol/inspector tsx src/server.ts"
+    "inspect": "npx @modelcontextprotocol/inspector tsx src/server.ts",
+    "db:check": "tsx scripts/check-supabase.ts",
+    "tenant:create": "tsx scripts/cli/create-tenant.ts",
+    "import:vma": "tsx scripts/cli/import-mvp-data.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
