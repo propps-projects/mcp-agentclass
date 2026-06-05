@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { buildServer } from "./build-server.ts";
-import { resolveTenantBySlug, type Tenant } from "./lib/tenant.ts";
+import { resolveTenantBySlug, isMcpAccessible, type Tenant } from "./lib/tenant.ts";
 import { findStudentById, listAccessibleCourseIds } from "./lib/students.ts";
 import { validateAccessToken } from "./lib/oauth.ts";
 import { matchOAuthRoute, handleOAuthRoute } from "./oauth-router.ts";
@@ -276,6 +276,7 @@ const httpServer = http.createServer(async (req, res) => {
     if (route.kind === "discovery") {
       const tenant = await resolveTenantBySlug(route.tenantSlug);
       if (!tenant) { res.writeHead(404).end("tenant not found"); return; }
+      if (!isMcpAccessible(tenant)) { res.writeHead(404).end("tenant unavailable"); return; }
       const oauthMatch = matchOAuthRoute(route.suffix, req.method ?? "GET");
       if (!oauthMatch) { res.writeHead(404).end("not found"); return; }
       await handleOAuthRoute(oauthMatch, tenant, req, res);
@@ -288,6 +289,9 @@ const httpServer = http.createServer(async (req, res) => {
       if (!tenant) { res.writeHead(404).end("tenant not found"); return; }
 
       // Admin dashboard: /t/:slug/admin/*
+      // ALWAYS allow — even suspended/canceled tenants need to log in to
+      // re-pay or see what's wrong. The dashboard renders a banner with
+      // the current status.
       if (route.suffix === "/admin" || route.suffix.startsWith("/admin/")) {
         const adminSuffix = route.suffix === "/admin" ? "" : route.suffix.slice("/admin".length);
         const adminMatch = matchAdminRoute(adminSuffix, req.method ?? "GET");
@@ -296,6 +300,12 @@ const httpServer = http.createServer(async (req, res) => {
           return;
         }
         res.writeHead(404).end("admin route not found");
+        return;
+      }
+
+      // Everything below is consumer-facing — block if tenant is suspended.
+      if (!isMcpAccessible(tenant)) {
+        res.writeHead(404).end("tenant unavailable");
         return;
       }
 

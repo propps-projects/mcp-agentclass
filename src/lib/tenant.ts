@@ -26,6 +26,12 @@ const CACHE_TTL_MS = 60_000;
  * Cached for 60s in memory to avoid hammering Postgres on every tool call.
  * Cache invalidation: not needed for MVP — tenant rows change rarely.
  */
+/**
+ * Returns the tenant regardless of status. Callers decide what to do:
+ *   - admin dashboard: allow suspended/canceled so the owner can re-pay
+ *   - OAuth + MCP: caller must check status and 403 if not active|trial
+ *   - webhooks: caller looks up tenant directly via PostgREST
+ */
 export async function resolveTenantBySlug(slug: string): Promise<Tenant | null> {
   const cached = cache.get(slug);
   if (cached && cached.expires > Date.now()) return cached.tenant;
@@ -42,7 +48,6 @@ export async function resolveTenantBySlug(slug: string): Promise<Tenant | null> 
     `slug=eq.${encodeURIComponent(slug)}&select=id,slug,name,status,plan_id,panda_api_key_enc`,
   );
   if (!row) return null;
-  if (row.status === "suspended" || row.status === "canceled") return null;
 
   const tenant: Tenant = {
     id: row.id,
@@ -56,6 +61,15 @@ export async function resolveTenantBySlug(slug: string): Promise<Tenant | null> 
   };
   cache.set(slug, { tenant, expires: Date.now() + CACHE_TTL_MS });
   return tenant;
+}
+
+/**
+ * Whether a tenant's MCP + OAuth endpoints should be accessible to students.
+ * Suspended (payment late) and canceled tenants are off-limits; trial and
+ * active are good.
+ */
+export function isMcpAccessible(tenant: Tenant): boolean {
+  return tenant.status === "active" || tenant.status === "trial";
 }
 
 /**

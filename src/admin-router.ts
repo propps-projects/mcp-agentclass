@@ -101,6 +101,7 @@ async function loginGet(tenant: Tenant, req: IncomingMessage, res: ServerRespons
   html(res, 200, adminLoginHtml({
     tenantName: tenant.name,
     tenantSlug: tenant.slug,
+    tenantStatus: tenant.status,
     error: q.get("error") ?? undefined,
     sent: q.get("sent") === "1",
   }));
@@ -178,6 +179,7 @@ async function dashboard(tenant: Tenant, req: IncomingMessage, res: ServerRespon
     title: "Dashboard",
     tenantName: tenant.name,
     tenantSlug: tenant.slug,
+    tenantStatus: tenant.status,
     activeNav: "dashboard",
     admin,
     body: dashboardHtml({ tenant, courses, allCourses }),
@@ -203,6 +205,7 @@ async function integrationsGet(tenant: Tenant, req: IncomingMessage, res: Server
     title: "Integrações",
     tenantName: tenant.name,
     tenantSlug: tenant.slug,
+    tenantStatus: tenant.status,
     activeNav: "integrations",
     admin,
     body: integrationsHtml({
@@ -303,6 +306,7 @@ async function coursesGet(tenant: Tenant, req: IncomingMessage, res: ServerRespo
     title: "Cursos",
     tenantName: tenant.name,
     tenantSlug: tenant.slug,
+    tenantStatus: tenant.status,
     activeNav: "courses",
     admin,
     body: coursesHtml({ tenant, courses, message: q.get("msg") ?? undefined }),
@@ -390,6 +394,7 @@ async function courseDetail(
       title: "Curso não encontrado",
       tenantName: tenant.name,
       tenantSlug: tenant.slug,
+    tenantStatus: tenant.status,
       activeNav: "courses",
       admin,
       body: `<h1>Curso não encontrado</h1><p><a href="/t/${esc(tenant.slug)}/admin/courses">← Voltar</a></p>`,
@@ -422,6 +427,7 @@ async function courseDetail(
     title: course.name,
     tenantName: tenant.name,
     tenantSlug: tenant.slug,
+    tenantStatus: tenant.status,
     activeNav: "courses",
     admin,
     body: courseDetailHtml({
@@ -558,6 +564,7 @@ async function planPage(tenant: Tenant, req: IncomingMessage, res: ServerRespons
       title: "Plano",
       tenantName: tenant.name,
       tenantSlug: tenant.slug,
+    tenantStatus: tenant.status,
       activeNav: "plan",
       admin,
       body: `<h1>Plano "${esc(tenant.planId)}" não encontrado</h1>`,
@@ -569,6 +576,7 @@ async function planPage(tenant: Tenant, req: IncomingMessage, res: ServerRespons
     title: "Plano e Uso",
     tenantName: tenant.name,
     tenantSlug: tenant.slug,
+    tenantStatus: tenant.status,
     activeNav: "plan",
     admin,
     body: planPageHtml({ tenant, current, allPlans, usage }),
@@ -656,6 +664,7 @@ function layoutHtml(args: {
   title: string;
   tenantName: string;
   tenantSlug?: string;
+  tenantStatus?: string;
   activeNav?: string;
   admin?: TenantAdmin;
   body: string;
@@ -675,8 +684,27 @@ function layoutHtml(args: {
       <a href="/t/${slug}/admin/logout">Sair</a>
     </div>
   ` : `<div style="flex:1"></div>`;
+
+  // Banner for suspended/canceled — admin can still see + act, but the
+  // public MCP/OAuth surfaces are off.
+  let statusBanner = "";
+  if (args.tenantStatus === "suspended") {
+    statusBanner = `<div style="background:#7f1d1d;color:#fecaca;padding:12px 24px;text-align:center;font-size:13px">
+      ⚠ Sua conta está <strong>suspensa</strong> por pagamento em atraso. Os alunos não conseguem acessar o tutor MCP até a renovação ser processada. <a href="/pricing" style="color:#fecaca;text-decoration:underline">Ver opções de plano</a>.
+    </div>`;
+  } else if (args.tenantStatus === "canceled") {
+    statusBanner = `<div style="background:#475569;color:#cbd5e1;padding:12px 24px;text-align:center;font-size:13px">
+      Sua conta está <strong>cancelada</strong>. Pra reativar, mande email pra <a href="mailto:rafael@infosaas.co" style="color:#cbd5e1">rafael@infosaas.co</a>.
+    </div>`;
+  } else if (args.tenantStatus === "trial") {
+    statusBanner = `<div style="background:#92400e;color:#fef3c7;padding:8px 24px;text-align:center;font-size:13px">
+      Você está em <strong>trial</strong>. Finalize o pagamento pra continuar após o período.
+    </div>`;
+  }
+
   return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>${esc(args.title)} — ${esc(args.tenantName)}</title>
 <style>${COMMON_CSS}</style>
+${statusBanner}
 <header>
   <div class="brand">${esc(args.tenantName)}</div>
   ${nav}
@@ -686,7 +714,7 @@ ${args.body}
 </main>`;
 }
 
-function adminLoginHtml(args: { tenantName: string; tenantSlug: string; error?: string; sent: boolean }): string {
+function adminLoginHtml(args: { tenantName: string; tenantSlug: string; tenantStatus?: string; error?: string; sent: boolean }): string {
   const errors: Record<string, string> = {
     email_invalid: "Email inválido.",
     send_failed: "Não foi possível enviar o email agora. Tente de novo.",
