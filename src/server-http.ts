@@ -16,6 +16,7 @@ import { findStudentById, listAccessibleCourseIds } from "./lib/students.ts";
 import { validateAccessToken } from "./lib/oauth.ts";
 import { matchOAuthRoute, handleOAuthRoute } from "./oauth-router.ts";
 import { matchAdminRoute, handleAdminRoute } from "./admin-router.ts";
+import { matchSuperAdminRoute, handleSuperAdminRoute } from "./super-admin-router.ts";
 import { processHotmartEvent, verifyHottok, getHotmartHottok } from "./lib/hotmart.ts";
 import type { AdapterMode } from "./ui/player.ts";
 
@@ -76,13 +77,20 @@ type TenantedSuffix    = { kind: "tenant"; tenantSlug: string; suffix: string };
 type LegacyMcp         = { kind: "legacy"; suffix: keyof typeof ENDPOINT_SUFFIXES };
 type HotmartHook       = { kind: "hotmart"; tenantSlug: string };
 type CanonicalDiscovery = { kind: "discovery"; tenantSlug: string; suffix: string };
-type RouteMatch        = TenantedSuffix | LegacyMcp | HotmartHook | CanonicalDiscovery | null;
+type SuperAdmin        = { kind: "super-admin"; suffix: string };
+type RouteMatch        = TenantedSuffix | LegacyMcp | HotmartHook | CanonicalDiscovery | SuperAdmin | null;
 
 function matchRoute(url: string): RouteMatch {
   const pathOnly = url.split("?")[0];
 
   const hotmart = pathOnly.match(/^\/webhooks\/hotmart\/([a-z0-9][a-z0-9-]{0,62})$/i);
   if (hotmart) return { kind: "hotmart", tenantSlug: hotmart[1] };
+
+  // Platform super-admin lives at /super-admin/*
+  if (pathOnly === "/super-admin" || pathOnly.startsWith("/super-admin/")) {
+    const suffix = pathOnly === "/super-admin" ? "" : pathOnly.slice("/super-admin".length);
+    return { kind: "super-admin", suffix };
+  }
 
   // Canonical RFC 8414 / RFC 9728 well-known URLs put the issuer/resource
   // path AFTER the well-known segment. We serve both these and the legacy
@@ -201,6 +209,14 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
+    // ---------- Super admin (platform operator) ----------
+    if (route.kind === "super-admin") {
+      const m = matchSuperAdminRoute(route.suffix, req.method ?? "GET");
+      if (!m) { res.writeHead(404).end("super-admin route not found"); return; }
+      await handleSuperAdminRoute(m, req, res);
+      return;
+    }
+
     // ---------- Canonical RFC 8414/9728 well-known discovery ----------
     if (route.kind === "discovery") {
       const tenant = await resolveTenantBySlug(route.tenantSlug);
@@ -299,4 +315,5 @@ httpServer.listen(PORT, () => {
   console.error(`  PRM discovery (RFC 9728): /.well-known/oauth-protected-resource/t/:slug/{mcp,mcp-gpt}`);
   console.error(`  Hotmart webhook:      /webhooks/hotmart/:slug`);
   console.error(`  Admin dashboard:      /t/:slug/admin (login → /t/:slug/admin/login)`);
+  console.error(`  Super admin:          /super-admin (whitelist via SUPER_ADMIN_EMAILS)`);
 });

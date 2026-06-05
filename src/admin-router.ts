@@ -432,138 +432,19 @@ async function courseDetail(
   }));
 }
 
-async function lessonsPost(
+// Manual lesson-add and pre-transcribed JSON upload paths were removed in
+// Phase 3.1 iteration. Product decision: force all transcriptions through
+// Whisper for quality consistency + predictable monthly billing. The only
+// lesson-content entry point is now POST /admin/courses/:slug/ingest
+// (Panda + Whisper). Old form posts get a friendly redirect.
+
+async function lessonsRemoved(
   tenant: Tenant,
   courseSlug: string,
-  req: IncomingMessage,
+  _req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const admin = await requireAdmin(tenant, req, res);
-  if (!admin) return;
-  const course = await resolveCourseBySlug(tenant.id, courseSlug);
-  if (!course) return redirect(res, `${adminBase(tenant)}/courses?msg=course_not_found`);
-
-  const form = await readForm(req);
-  const title = (form.get("title") ?? "").trim();
-  const lessonNumberRaw = (form.get("lesson_number") ?? "").trim();
-  const sourceVideoId = (form.get("source_video_id") ?? "").trim();
-  const hlsUrl = (form.get("hls_url") ?? "").trim();
-  const embedUrl = (form.get("embed_url") ?? "").trim();
-  const thumbnailUrl = (form.get("thumbnail_url") ?? "").trim();
-  const durationSecRaw = (form.get("duration_sec") ?? "0").trim();
-  const transcriptJson = (form.get("transcript_json") ?? "").trim();
-
-  if (!title || !sourceVideoId) {
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=lesson_missing_fields`);
-  }
-
-  let transcript: { language: string; segments: { start: number; end: number; text: string }[] } | null = null;
-  if (transcriptJson) {
-    try {
-      const parsed = JSON.parse(transcriptJson);
-      if (Array.isArray(parsed?.segments)) {
-        transcript = { language: parsed.language ?? "pt", segments: parsed.segments };
-      } else if (Array.isArray(parsed)) {
-        transcript = { language: "pt", segments: parsed };
-      }
-    } catch {
-      return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=lesson_bad_transcript`);
-    }
-  }
-
-  try {
-    const { ingestLesson } = await import("./lib/ingest.ts");
-    const result = await ingestLesson(course.id, {
-      sourceVideoId,
-      lessonNumber: lessonNumberRaw ? parseInt(lessonNumberRaw, 10) : null,
-      title,
-      durationSec: parseInt(durationSecRaw, 10) || 0,
-      hlsUrl: hlsUrl || undefined,
-      embedUrl: embedUrl || undefined,
-      thumbnailUrl: thumbnailUrl || undefined,
-      transcript,
-      transcriptSource: transcript ? "uploaded" : undefined,
-    });
-    if (result.chunksInserted > 0 && course.ingest_status !== "ready") {
-      await sb.update("courses", `id=eq.${course.id}`, { ingest_status: "ready" });
-    }
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=lesson_saved`);
-  } catch (err) {
-    console.error("Lesson ingest failed:", err);
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=lesson_ingest_failed`);
-  }
-}
-
-async function lessonsUploadJson(
-  tenant: Tenant,
-  courseSlug: string,
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
-  const admin = await requireAdmin(tenant, req, res);
-  if (!admin) return;
-  const course = await resolveCourseBySlug(tenant.id, courseSlug);
-  if (!course) return redirect(res, `${adminBase(tenant)}/courses?msg=course_not_found`);
-
-  let body;
-  try {
-    const { parseMultipart } = await import("./lib/multipart.ts");
-    body = await parseMultipart(req);
-  } catch (err) {
-    console.error("Multipart parse failed:", err);
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=upload_failed`);
-  }
-
-  const file = body.files["json"];
-  if (!file) {
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=upload_no_file`);
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(file.buffer.toString("utf8"));
-  } catch {
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=upload_bad_json`);
-  }
-
-  // Accept either { lessons: [...] } or [...]
-  const list: Array<Record<string, unknown>> = Array.isArray((parsed as { lessons?: unknown[] })?.lessons)
-    ? ((parsed as { lessons: Array<Record<string, unknown>> }).lessons)
-    : Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
-
-  if (!list.length) {
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=upload_empty`);
-  }
-
-  try {
-    const { ingestLesson } = await import("./lib/ingest.ts");
-    let totalChunks = 0;
-    for (const l of list) {
-      const transcriptRaw = l.transcript as { language?: string; segments?: unknown[] } | undefined;
-      const transcript = transcriptRaw && Array.isArray(transcriptRaw.segments)
-        ? { language: (transcriptRaw.language as string) ?? "pt", segments: transcriptRaw.segments as { start: number; end: number; text: string }[] }
-        : null;
-      const result = await ingestLesson(course.id, {
-        sourceVideoId: (l.sourceVideoId ?? l.id ?? `manual-${Date.now()}`) as string,
-        lessonNumber: (l.lessonNumber ?? null) as number | null,
-        title: (l.title ?? "Sem título") as string,
-        durationSec: (l.durationSec ?? 0) as number,
-        hlsUrl: l.hlsUrl as string | undefined,
-        embedUrl: l.embedUrl as string | undefined,
-        thumbnailUrl: l.thumbnailUrl as string | undefined,
-        transcript,
-        transcriptSource: transcript ? "uploaded" : undefined,
-      });
-      totalChunks += result.chunksInserted;
-    }
-    if (totalChunks > 0) {
-      await sb.update("courses", `id=eq.${course.id}`, { ingest_status: "ready" });
-    }
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=upload_ok&n=${list.length}`);
-  } catch (err) {
-    console.error("Lesson upload ingest failed:", err);
-    return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=upload_failed`);
-  }
+  return redirect(res, `${adminBase(tenant)}/courses/${courseSlug}?msg=use_panda_ingest`);
 }
 
 async function materialsUpload(
@@ -1088,7 +969,7 @@ function planPageHtml(args: {
   ${gauge("Cursos", args.usage.courses.used, args.usage.courses.limit, (n) => String(n))}
   ${gauge("Transcrição (min)", args.usage.transcribeMinutesThisMonth.used, args.usage.transcribeMinutesThisMonth.limit, (n) => n.toFixed(1))}
   ${gauge("Alunos ativos", args.usage.activeStudents.used, args.usage.activeStudents.limit, (n) => String(n))}
-  ${gauge("Base de conhecimento", args.usage.kbBytes.used, args.usage.kbBytes.limit, fmtBytes)}
+  ${gauge("Arquivos (KB tutor)", args.usage.kbBytes.used, args.usage.kbBytes.limit, fmtBytes)}
 </div>
 
 <h2>Outros planos</h2>
@@ -1101,7 +982,7 @@ function planPageHtml(args: {
         <li>${esc(limitLabel(p.maxCourses, "cursos"))}</li>
         <li>${esc(limitLabel(p.transcribeHoursMonth, "h transcrição/mês"))}</li>
         <li>${esc(limitLabel(p.activeStudentsMonth, "alunos ativos/mês"))}</li>
-        <li>${p.kbSizeBytes == null ? "∞ KB" : esc(fmtBytes(p.kbSizeBytes)) + " KB"}</li>
+        <li>${p.kbSizeBytes == null ? "armazenamento ilimitado" : esc(fmtBytes(p.kbSizeBytes)) + " de arquivos"}</li>
       </ul>
     </div>
   `).join("")}
@@ -1150,7 +1031,8 @@ function courseDetailHtml(args: {
     ingest_course_not_found: ["Curso não encontrado.", "error"],
     ingest_failed: ["Falha ao iniciar ingest. Veja os logs.", "error"],
     ingest_quota_transcribe: ["Minutos de transcrição do mês ultrapassariam o plano. Veja Plano e Uso.", "error"],
-    quota_kb: ["Tamanho de KB do plano atingido. Veja Plano e Uso.", "error"],
+    quota_kb: ["Limite de armazenamento de arquivos atingido. Veja Plano e Uso.", "error"],
+    use_panda_ingest: ["Pra adicionar/atualizar aulas, configure o Panda folder e use o botão 'Iniciar ingest'.", "error"],
   };
   const [msgText, msgKind] = args.message ? msgs[args.message] ?? [args.message, "error"] : ["", ""];
   const isIngesting = args.course.ingest_status === "ingesting"
@@ -1230,40 +1112,11 @@ ${isIngesting ? '<div class="msg success">⏳ Ingest em andamento. Esta página 
   `}
 
   <hr>
-  <h3>Adicionar aula manualmente</h3>
-  <p class="help">Use quando você tem a transcrição pronta e quer colar direto. <code>source_video_id</code> identifica de forma única (ex: ID do vídeo no Panda/Vimeo/YouTube).</p>
-  <form method="POST" action="/t/${esc(args.tenant.slug)}/admin/courses/${esc(args.course.slug)}/lessons">
-    <div class="row">
-      <div><label>Título *</label><input type="text" name="title" required placeholder="Aula 01 — Introdução"></div>
-      <div><label>Número da aula</label><input type="text" name="lesson_number" placeholder="1"></div>
-      <div><label>Duração (segundos)</label><input type="text" name="duration_sec" placeholder="600"></div>
-    </div>
-    <div class="row">
-      <div><label>Source Video ID *</label><input type="text" name="source_video_id" required placeholder="uuid ou ID do vídeo"></div>
-    </div>
-    <div class="row">
-      <div><label>HLS URL</label><input type="text" name="hls_url" placeholder="https://.../playlist.m3u8"></div>
-      <div><label>Embed URL</label><input type="text" name="embed_url" placeholder="https://.../embed?v=..."></div>
-    </div>
-    <div class="row">
-      <div><label>Thumbnail URL</label><input type="text" name="thumbnail_url" placeholder="https://.../thumb.jpg"></div>
-    </div>
-    <div><label>Transcrição (JSON com array de segments)</label>
-      <textarea name="transcript_json" style="min-height:140px;font-family:monospace;font-size:12px" placeholder='{"language":"pt","segments":[{"start":0,"end":4.5,"text":"texto da aula..."}, ...]}'></textarea>
-      <p class="help">Aceita formato OpenAI Whisper (<code>segments[]</code> com <code>start/end/text</code>) ou um array puro de segments.</p>
-    </div>
-    <div style="margin-top:12px"><button type="submit">Salvar aula</button></div>
-  </form>
-
-  <hr>
-  <h3>Upload de JSON pré-transcrito (vários de uma vez)</h3>
-  <p class="help">JSON no formato <code>{"lessons":[{"sourceVideoId":"...","title":"...","durationSec":600,"transcript":{"language":"pt","segments":[...]}}]}</code></p>
-  <form method="POST" action="/t/${esc(args.tenant.slug)}/admin/courses/${esc(args.course.slug)}/lessons/upload" enctype="multipart/form-data">
-    <div class="row">
-      <div><label>Arquivo JSON</label><input type="file" name="json" accept="application/json,.json" required></div>
-      <button type="submit">Enviar</button>
-    </div>
-  </form>
+  <p class="help">
+    💡 Pra adicionar/atualizar aulas, configure o <strong>Panda Folder ID</strong> deste
+    curso e use o botão <strong>"Iniciar ingest agora"</strong> acima. Todo o conteúdo é
+    transcrito via Whisper pra garantir qualidade consistente.
+  </p>
 </div>
 
 <!-- ======================== MATERIAIS (KB) ======================== -->
@@ -1382,8 +1235,8 @@ export async function handleAdminRoute(
     case "courses-get":         return coursesGet(tenant, req, res);
     case "courses-post":        return coursesPost(tenant, req, res);
     case "course-detail":       return courseDetail(tenant, match.courseSlug, req, res);
-    case "lessons-post":        return lessonsPost(tenant, match.courseSlug, req, res);
-    case "lessons-upload":      return lessonsUploadJson(tenant, match.courseSlug, req, res);
+    case "lessons-post":        return lessonsRemoved(tenant, match.courseSlug, req, res);
+    case "lessons-upload":      return lessonsRemoved(tenant, match.courseSlug, req, res);
     case "lesson-delete":       return lessonDelete(tenant, match.courseSlug, req, res);
     case "materials-upload":    return materialsUpload(tenant, match.courseSlug, req, res);
     case "material-delete":     return materialDelete(tenant, match.courseSlug, req, res);
