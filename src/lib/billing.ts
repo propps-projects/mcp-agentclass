@@ -19,6 +19,7 @@
  */
 
 import { sb } from "./db-api.ts";
+import { issueMagicLink, sendMagicLinkEmail } from "./magic-links.ts";
 
 export interface WebhookEvent {
   event?: string;
@@ -123,6 +124,8 @@ export async function processValidapayEvent(ev: WebhookEvent): Promise<ProcessRe
     return { ok: true, action: "ignored", reason: "tenant_not_matched" };
   }
 
+  const wasActiveBefore = tenant.status === "active";
+
   switch (evType) {
     case "payment.success":
     case "subscription.renewed": {
@@ -130,6 +133,7 @@ export async function processValidapayEvent(ev: WebhookEvent): Promise<ProcessRe
         status: "active",
         subscription_active_until: extendActiveUntil(tenant.subscription_active_until),
       });
+      if (!wasActiveBefore) await notifyAdminActivated(tenant.id).catch((e) => console.error("notify failed:", e));
       return { ok: true, action: "extended", tenantId: tenant.id };
     }
     case "subscription.activated": {
@@ -139,6 +143,7 @@ export async function processValidapayEvent(ev: WebhookEvent): Promise<ProcessRe
         validapay_subscription_id: subId ?? tenant.validapay_subscription_id,
         subscription_active_until: extendActiveUntil(tenant.subscription_active_until),
       });
+      if (!wasActiveBefore) await notifyAdminActivated(tenant.id).catch((e) => console.error("notify failed:", e));
       return { ok: true, action: "activated", tenantId: tenant.id };
     }
     case "subscription.trial": {
@@ -161,4 +166,39 @@ export async function processValidapayEvent(ev: WebhookEvent): Promise<ProcessRe
     default:
       return { ok: true, action: "ignored", reason: `unhandled_event:${evType}`, tenantId: tenant.id };
   }
+}
+
+/**
+ * Right after a tenant transitions from trial/canceled into active, mail the
+ * owner-role admin a magic link so they can land in the dashboard without
+ * having to remember a URL. The post-checkout ValidaPay page doesn't redirect
+ * back to us, so this is the primary "next step" cue.
+ */
+async function notifyAdminActivated(tenantId: string): Promise<void> {
+  const tenant = await sb.selectOne<{ slug: string; name: string }>(
+    "tenants",
+    `id=eq.${tenantId}&select=slug,name`,
+  );
+  if (!tenant) return;
+
+  const admin = await sb.selectOne<{ email: string }>(
+    "tenant_admins",
+    `tenant_id=eq.${tenantId}&role=eq.owner&select=email&limit=1`,
+  );
+  if (!admin) return;
+
+  const token = await issueMagicLink({
+    tenantId,
+    email: admin.email,
+    intent: "admin_login",
+    oauthState: null,
+  });
+  const publicUrl = (process.env.PUBLIC_URL ?? "http://localhost:3333").replace(/\/+$/, "");
+  const url = `${publicUrl}/t/${tenant.slug}/admin/verify?token=${encodeURIComponent(token)}`;
+
+  await sendMagicLinkEmail({
+    to: admin.email,
+    url,
+    tenantName: `${tenant.name} (Pagamento confirmado)`,
+  });
 }
