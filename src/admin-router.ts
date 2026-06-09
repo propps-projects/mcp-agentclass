@@ -32,6 +32,7 @@ import {
 } from "./lib/sessions.ts";
 import { sb } from "./lib/db-api.ts";
 import { listCoursesForTenant } from "./lib/courses.ts";
+import { adminShell, icons, ADMIN_SHELL_CSS } from "./ui/admin-shell.ts";
 
 function publicUrl(): string {
   return (process.env.PUBLIC_URL ?? "http://localhost:3333").replace(/\/+$/, "");
@@ -968,50 +969,73 @@ function layoutHtml(args: {
   body: string;
 }): string {
   const slug = args.tenantSlug ?? "";
-  const navItem = (id: string, label: string, href: string) =>
-    `<a href="${esc(href)}" ${args.activeNav === id ? 'class="active"' : ""}>${esc(label)}</a>`;
-  const nav = args.admin ? `
-    <nav>
-      ${navItem("dashboard", "Dashboard", `/t/${slug}/admin`)}
-      ${navItem("courses", "Cursos", `/t/${slug}/admin/courses`)}
-      ${navItem("students", "Alunos", `/t/${slug}/admin/students/import`)}
-      ${navItem("integrations", "Integrações", `/t/${slug}/admin/integrations`)}
-      ${navItem("plan", "Plano e Uso", `/t/${slug}/admin/plan`)}
-    </nav>
-    <div class="right">
-      <span>${esc(args.admin.email)}</span>
-      <a href="/t/${slug}/admin/logout">Sair</a>
-    </div>
-  ` : `<div style="flex:1"></div>`;
+  const adminBaseUrl = `/t/${slug}/admin`;
 
-  // Banner for suspended/canceled — admin can still see + act, but the
-  // public MCP/OAuth surfaces are off.
-  let statusBanner = "";
+  // Status banner + topbar pill (Phase 7: OpenAI-style admin shell)
+  let banner = "";
+  let badge: { label: string; tone: "ok"|"warn"|"danger"|"neutral" } | undefined;
   if (args.tenantStatus === "suspended") {
-    statusBanner = `<div style="background:#7f1d1d;color:#fecaca;padding:12px 24px;text-align:center;font-size:13px">
-      ⚠ Sua conta está <strong>suspensa</strong> por pagamento em atraso. Os alunos não conseguem acessar o tutor MCP até a renovação ser processada. <a href="/pricing" style="color:#fecaca;text-decoration:underline">Ver opções de plano</a>.
-    </div>`;
+    banner = `<div class="ax-banner danger">⚠ Conta <strong>suspensa</strong> por pagamento em atraso. Alunos não acessam o tutor MCP. <a href="${adminBaseUrl}/plan">Ver plano</a></div>`;
+    badge = { label: "Suspenso", tone: "danger" };
   } else if (args.tenantStatus === "canceled") {
-    statusBanner = `<div style="background:#475569;color:#cbd5e1;padding:12px 24px;text-align:center;font-size:13px">
-      Sua conta está <strong>cancelada</strong>. Pra reativar, mande email pra <a href="mailto:rafael@infosaas.co" style="color:#cbd5e1">rafael@infosaas.co</a>.
-    </div>`;
+    banner = `<div class="ax-banner muted">Conta <strong>cancelada</strong>. Pra reativar, mande email pra <a href="mailto:rafael@infosaas.co">rafael@infosaas.co</a>.</div>`;
+    badge = { label: "Cancelada", tone: "neutral" };
   } else if (args.tenantStatus === "trial") {
-    statusBanner = `<div style="background:#92400e;color:#fef3c7;padding:8px 24px;text-align:center;font-size:13px">
-      Você está em <strong>trial</strong>. Finalize o pagamento pra continuar após o período.
-    </div>`;
+    banner = `<div class="ax-banner warn">Você está em <strong>trial</strong>. Finalize o pagamento pra continuar após o período.</div>`;
+    badge = { label: "Trial", tone: "warn" };
+  } else if (args.tenantStatus === "active") {
+    badge = { label: "Ativo", tone: "ok" };
   }
 
-  return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>${esc(args.title)} — ${esc(args.tenantName)}</title>
-<style>${COMMON_CSS}</style>
-${statusBanner}
-<header>
-  <div class="brand">${esc(args.tenantName)}</div>
-  ${nav}
-</header>
-<main>
-${args.body}
-</main>`;
+  // No-session views (login, magic-link verify) shouldn't show sidebar
+  if (!args.admin) {
+    return `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(args.title)} — ${esc(args.tenantName)}</title>
+<link rel="icon" type="image/svg+xml" href="/brand/ico-logo-black.svg">
+<style>${ADMIN_SHELL_CSS}
+  .ax-auth-wrap { min-height: 100vh; display:flex; align-items:center; justify-content:center; padding: 32px 16px; background: var(--ax-surface-2) }
+  .ax-auth-card { background: var(--ax-surface); border: 1px solid var(--ax-border); border-radius: var(--ax-radius-lg); padding: 32px; max-width: 420px; width: 100%; box-shadow: var(--ax-shadow-md) }
+  .ax-auth-brand { display:flex; flex-direction:column; align-items:center; margin-bottom: 24px }
+  .ax-auth-brand img { height: 26px; margin-bottom: 8px }
+  .ax-auth-brand small { color: var(--ax-text-mute); font-size: 12.5px }
+</style></head>
+<body>
+${banner}
+<div class="ax-auth-wrap">
+  <div class="ax-auth-card">
+    <div class="ax-auth-brand">
+      <img src="/brand/logo-black.svg" alt="${esc(args.tenantName)}">
+      ${args.tenantName ? `<small>${esc(args.tenantName)}</small>` : ""}
+    </div>
+    ${args.body}
+  </div>
+</div>
+</body></html>`;
+  }
+
+  return adminShell({
+    pageTitle: args.title,
+    brandLabel: args.tenantName,
+    brandSub: args.tenantName,
+    brandHref: adminBaseUrl,
+    nav: [{
+      items: [
+        { id: "dashboard",    label: "Dashboard",    href: `${adminBaseUrl}`,                       icon: icons.dashboard },
+        { id: "courses",      label: "Cursos",       href: `${adminBaseUrl}/courses`,               icon: icons.courses },
+        { id: "students",     label: "Alunos",       href: `${adminBaseUrl}/students/import`,       icon: icons.students },
+        { id: "integrations", label: "Integrações",  href: `${adminBaseUrl}/integrations`,          icon: icons.plug },
+        { id: "plan",         label: "Plano e uso",  href: `${adminBaseUrl}/plan`,                  icon: icons.plan },
+      ],
+    }],
+    activeId: args.activeNav,
+    statusBadge: badge,
+    userEmail: args.admin.email,
+    logoutHref: `${adminBaseUrl}/logout`,
+    banner,
+    body: args.body,
+  });
 }
+
 
 function adminLoginHtml(args: { tenantName: string; tenantSlug: string; tenantStatus?: string; error?: string; sent: boolean }): string {
   const errors: Record<string, string> = {

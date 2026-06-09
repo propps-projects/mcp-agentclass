@@ -20,6 +20,7 @@ import { findMcpUserById, listAccessibleCoursesGlobal } from "./lib/mcp-users.ts
 import { matchAdminRoute, handleAdminRoute } from "./admin-router.ts";
 import { matchSuperAdminRoute, handleSuperAdminRoute } from "./super-admin-router.ts";
 import { matchPublicRoute, handlePublicRoute } from "./public-router.ts";
+import { isBrandRoute, handleBrandRoute } from "./brand-router.ts";
 import { initObservability, captureError } from "./lib/observability.ts";
 
 // Init Sentry before the server starts handling requests so that
@@ -215,6 +216,13 @@ const httpServer = http.createServer(async (req, res) => {
     }
 
     if (!req.url) { res.writeHead(404).end("not found"); return; }
+
+    // Brand assets (/brand/*) — served from on-disk /assets dir
+    const pathOnlyEarly = req.url.split("?")[0];
+    if (req.method === "GET" && isBrandRoute(pathOnlyEarly)) {
+      await handleBrandRoute(pathOnlyEarly, res);
+      return;
+    }
 
     // Public routes (pricing, signup) — match before tenant-scoped path so
     // they don't collide.

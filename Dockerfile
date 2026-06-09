@@ -37,6 +37,7 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
 COPY data ./data
+COPY assets ./assets
 COPY .env.example ./
 
 # Default port; override with `-e PORT=...`

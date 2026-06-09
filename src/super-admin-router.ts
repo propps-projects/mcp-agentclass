@@ -21,6 +21,7 @@ import {
   type SuperAdminSession,
 } from "./lib/super-admin.ts";
 import { issueMagicLink, consumeMagicLink, sendMagicLinkEmail } from "./lib/magic-links.ts";
+import { adminShell, icons, ADMIN_SHELL_CSS } from "./ui/admin-shell.ts";
 
 function publicUrl(): string {
   return (process.env.PUBLIC_URL ?? "http://localhost:3333").replace(/\/+$/, "");
@@ -285,43 +286,20 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
-const CSS = `
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0f172a;color:#e2e8f0;line-height:1.5}
-  header{background:#020617;color:#fff;padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #1e293b}
-  header .brand{font-weight:600;font-size:18px;color:#60a5fa}
-  header nav{display:flex;gap:16px;flex:1}
-  header nav a{color:#94a3b8;text-decoration:none;font-size:14px}
-  header nav a.active{color:#fff;font-weight:500}
-  header .right{color:#94a3b8;font-size:13px;display:flex;gap:12px;align-items:center}
-  header .right a{color:#94a3b8}
-  main{max-width:1100px;margin:24px auto;padding:0 24px}
-  h1{font-size:24px;margin:0 0 16px;color:#f1f5f9}
-  h2{font-size:18px;margin:32px 0 12px;color:#e2e8f0}
-  h3{font-size:13px;margin:16px 0 8px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px}
-  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;margin-bottom:16px;color:#e2e8f0}
-  label{display:block;font-size:12px;color:#94a3b8;margin-bottom:4px}
-  input[type=text],input[type=email],input[type=number],select{width:100%;padding:8px;border:1px solid #475569;border-radius:6px;font-size:13px;background:#0f172a;color:#e2e8f0;font-family:inherit}
-  button{padding:8px 16px;background:#3b82f6;color:#fff;border:0;border-radius:6px;font-size:13px;cursor:pointer}
-  button:hover{background:#2563eb}
-  button.secondary{background:#475569}
-  button.danger{background:#dc2626}
-  .row{display:flex;gap:8px;align-items:end}
-  code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:12px;color:#fbbf24}
-  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
-  th,td{text-align:left;padding:8px;border-bottom:1px solid #334155}
-  th{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px}
-  .badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600;text-transform:uppercase}
-  .badge.active{background:#065f46;color:#a7f3d0}
-  .badge.trial{background:#92400e;color:#fef3c7}
-  .badge.suspended{background:#991b1b;color:#fee2e2}
-  .badge.canceled{background:#475569;color:#cbd5e1}
-  .msg{padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:13px}
-  .msg.success{background:#064e3b;color:#a7f3d0}
-  .msg.error{background:#7f1d1d;color:#fecaca}
-  .stat{padding:16px;background:#0f172a;border-radius:8px;border:1px solid #334155}
-  .stat .label{font-size:11px;color:#94a3b8;text-transform:uppercase}
-  .stat .value{font-size:24px;font-weight:600;margin-top:4px;color:#f1f5f9}
+// Phase 7: super-admin shares the same OpenAI-style shell as the tenant
+// admin, with its own sidebar items + "Platform" subtitle.
+// Status pill colors for tenants table (kept for back-compat with existing
+// page templates that emit class="badge X").
+const SUPER_LEGACY_BADGE_CSS = `
+  .ax-content .badge { display:inline-block; padding:2px 8px; border-radius:99px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em }
+  .ax-content .badge.active    { background:#e8f5e9; color:#1e6f3e }
+  .ax-content .badge.trial     { background:#fff4d6; color:#8a5a00 }
+  .ax-content .badge.suspended { background:#ffe5e5; color:#a01818 }
+  .ax-content .badge.canceled  { background:#ececec; color:#5e5e5e }
+  .ax-content .row { display:flex; gap:8px; align-items:end }
+  .ax-content .stat { padding:14px 16px; background:var(--ax-surface); border-radius:var(--ax-radius); border:1px solid var(--ax-border) }
+  .ax-content .stat .label { font-size:11px; color:var(--ax-text-mute); text-transform:uppercase; letter-spacing:.04em }
+  .ax-content .stat .value { font-size:24px; font-weight:600; margin-top:4px; color:var(--ax-text) }
 `;
 
 function layout(args: {
@@ -330,25 +308,49 @@ function layout(args: {
   session?: SuperAdminSession;
   body: string;
 }): string {
-  const navItem = (id: string, label: string, href: string) =>
-    `<a href="${href}"${args.activeNav === id ? ' class="active"' : ""}>${esc(label)}</a>`;
-  const nav = args.session ? `
-    <nav>
-      ${navItem("dashboard", "Dashboard", "/super-admin")}
-      ${navItem("tenants", "Tenants", "/super-admin/tenants")}
-      ${navItem("plans", "Plans", "/super-admin/plans")}
-    </nav>
-    <div class="right">
-      <span>${esc(args.session.email)}</span>
-      <a href="/super-admin/logout">Sair</a>
-    </div>` : `<div style="flex:1"></div>`;
-  return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>${esc(args.title)} — Askine</title>
-<style>${CSS}</style>
-<header>
-  <div class="brand">⚡ Askine Super Admin</div>
-  ${nav}
-</header>
-<main>${args.body}</main>`;
+  // Unauthenticated screens (login + verify) use the centered auth-card.
+  if (!args.session) {
+    return `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(args.title)} — Askine</title>
+<link rel="icon" type="image/svg+xml" href="/brand/ico-logo-black.svg">
+<style>${ADMIN_SHELL_CSS}${SUPER_LEGACY_BADGE_CSS}
+  .ax-auth-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:32px 16px; background: var(--ax-surface-2) }
+  .ax-auth-card { background: var(--ax-surface); border:1px solid var(--ax-border); border-radius: var(--ax-radius-lg); padding: 32px; max-width: 420px; width: 100%; box-shadow: var(--ax-shadow-md) }
+  .ax-auth-brand { display:flex; flex-direction:column; align-items:center; margin-bottom: 24px }
+  .ax-auth-brand img { height: 26px; margin-bottom: 8px }
+  .ax-auth-brand small { color: var(--ax-text-mute); font-size: 12.5px; letter-spacing: 0.08em; text-transform: uppercase }
+</style></head>
+<body>
+<div class="ax-auth-wrap">
+  <div class="ax-auth-card">
+    <div class="ax-auth-brand">
+      <img src="/brand/logo-black.svg" alt="Askine">
+      <small>Platform</small>
+    </div>
+    ${args.body}
+  </div>
+</div>
+</body></html>`;
+  }
+
+  return adminShell({
+    pageTitle: args.title,
+    brandLabel: "Askine Platform",
+    brandSub: "Platform admin",
+    brandHref: "/super-admin",
+    nav: [{
+      items: [
+        { id: "dashboard", label: "Dashboard", href: "/super-admin",          icon: icons.dashboard },
+        { id: "tenants",   label: "Tenants",   href: "/super-admin/tenants",  icon: icons.tenants },
+        { id: "plans",     label: "Plans",     href: "/super-admin/plans",    icon: icons.plan },
+      ],
+    }],
+    activeId: args.activeNav,
+    userEmail: args.session.email,
+    logoutHref: "/super-admin/logout",
+    extraHead: `<style>${SUPER_LEGACY_BADGE_CSS}</style>`,
+    body: args.body,
+  });
 }
 
 function loginHtml(args: { error?: string; sent: boolean }): string {
