@@ -15,6 +15,8 @@ import { resolveTenantBySlug, isMcpAccessible, type Tenant } from "./lib/tenant.
 import { findStudentById, listAccessibleCourseIds } from "./lib/students.ts";
 import { validateAccessToken } from "./lib/oauth.ts";
 import { matchOAuthRoute, handleOAuthRoute } from "./oauth-router.ts";
+import { matchGlobalOAuthRoute, handleGlobalOAuthRoute } from "./global-oauth-router.ts";
+import { findMcpUserById, listAccessibleCoursesGlobal } from "./lib/mcp-users.ts";
 import { matchAdminRoute, handleAdminRoute } from "./admin-router.ts";
 import { matchSuperAdminRoute, handleSuperAdminRoute } from "./super-admin-router.ts";
 import { matchPublicRoute, handlePublicRoute } from "./public-router.ts";
@@ -87,7 +89,8 @@ type HotmartHook       = { kind: "hotmart"; tenantSlug: string };
 type ValidaPayHook     = { kind: "validapay"; secret: string };
 type CanonicalDiscovery = { kind: "discovery"; tenantSlug: string; suffix: string };
 type SuperAdmin        = { kind: "super-admin"; suffix: string };
-type RouteMatch        = TenantedSuffix | LegacyMcp | HotmartHook | ValidaPayHook | CanonicalDiscovery | SuperAdmin | null;
+type GlobalOAuthHit    = { kind: "global-oauth"; path: string };
+type RouteMatch        = TenantedSuffix | LegacyMcp | HotmartHook | ValidaPayHook | CanonicalDiscovery | SuperAdmin | GlobalOAuthHit | null;
 
 function matchRoute(url: string): RouteMatch {
   const pathOnly = url.split("?")[0];
@@ -100,6 +103,19 @@ function matchRoute(url: string): RouteMatch {
   // events across all tenants; matching is by subscription id / document.
   const validapay = pathOnly.match(/^\/webhooks\/validapay\/([A-Za-z0-9_\-]{16,128})$/);
   if (validapay) return { kind: "validapay", secret: validapay[1] };
+
+  // Global OAuth (Phase 5+): root-level discovery + endpoints
+  if (
+    pathOnly === "/.well-known/oauth-authorization-server" ||
+    pathOnly === "/.well-known/oauth-protected-resource" ||
+    pathOnly === "/oauth/register" ||
+    pathOnly === "/oauth/authorize" ||
+    pathOnly === "/oauth/token" ||
+    pathOnly === "/oauth/revoke" ||
+    pathOnly === "/auth/verify"
+  ) {
+    return { kind: "global-oauth", path: pathOnly };
+  }
 
   // Platform super-admin lives at /super-admin/*
   if (pathOnly === "/super-admin" || pathOnly.startsWith("/super-admin/")) {
@@ -138,8 +154,11 @@ async function handleMcpRequest(args: {
   tenant: Tenant | null;
   studentId: string | null;
   accessibleCourseIds: string[] | null;
+  /** Global Bearer (Phase 5+). When set, the MCP server runs in cross-tenant mode. */
+  mcpUser?: import("./lib/mcp-users.ts").McpUser | null;
+  accessibleCourses?: import("./lib/mcp-users.ts").AccessibleCourse[] | null;
 }): Promise<void> {
-  const { req, res, adapterMode, tenant, studentId, accessibleCourseIds } = args;
+  const { req, res, adapterMode, tenant, studentId, accessibleCourseIds, mcpUser, accessibleCourses } = args;
   const sessionId = (req.headers["mcp-session-id"] as string | undefined)?.toString();
 
   if (req.method === "POST") {
@@ -162,6 +181,8 @@ async function handleMcpRequest(args: {
       const server = buildServer(adapterMode, tenant, {
         studentId,
         accessibleCourseIds,
+        mcpUser: mcpUser ?? null,
+        accessibleCourses: accessibleCourses ?? null,
       });
       await server.connect(transport);
     }
@@ -269,6 +290,14 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
+    // ---------- Global OAuth (Phase 5+) ----------
+    if (route.kind === "global-oauth") {
+      const m = matchGlobalOAuthRoute(route.path, req.method ?? "GET");
+      if (!m) { res.writeHead(404).end("not found"); return; }
+      await handleGlobalOAuthRoute(m, req, res);
+      return;
+    }
+
     // ---------- Super admin (platform operator) ----------
     if (route.kind === "super-admin") {
       const m = matchSuperAdminRoute(route.suffix, req.method ?? "GET");
@@ -334,7 +363,7 @@ const httpServer = http.createServer(async (req, res) => {
       const bearer = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
       if (!bearer) return unauthorized(res, realm, prmUrl);
       const claims = await validateAccessToken(bearer);
-      if (!claims) return unauthorized(res, realm, prmUrl);
+      if (!claims || !claims.studentId) return unauthorized(res, realm, prmUrl);
       const student = await findStudentById(claims.studentId);
       if (!student || student.tenantId !== tenant.id) {
         return unauthorized(res, realm, prmUrl);
@@ -351,15 +380,44 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
-    // ---------- Legacy single-tenant routes ----------
+    // ---------- /mcp + /mcp-gpt — global (Phase 5+) OR legacy ----------
     if (route.kind === "legacy") {
+      const bearer = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+      const adapterMode = ENDPOINT_SUFFIXES[route.suffix];
+      const publicUrl = (process.env.PUBLIC_URL || "http://localhost:3333").replace(/\/+$/, "");
+      const prmUrl = `${publicUrl}/.well-known/oauth-protected-resource`;
+
+      // Priority 1: global OAuth Bearer (Phase 5+)
+      if (bearer && bearer !== LEGACY_AUTH_TOKEN) {
+        const claims = await validateAccessToken(bearer);
+        if (!claims || !claims.mcpUserId) {
+          return unauthorized(res, "Askine", prmUrl);
+        }
+        const mcpUser = await findMcpUserById(claims.mcpUserId);
+        if (!mcpUser) return unauthorized(res, "Askine", prmUrl);
+        const accessibleCourses = await listAccessibleCoursesGlobal(mcpUser.email);
+        await handleMcpRequest({
+          req, res,
+          adapterMode,
+          tenant: null,
+          studentId: null,
+          accessibleCourseIds: null,
+          mcpUser,
+          accessibleCourses,
+        });
+        return;
+      }
+
+      // Priority 2: legacy MCP_AUTH_TOKEN (deprecated single-tenant fallback)
       if (LEGACY_AUTH_TOKEN) {
-        const got = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-        if (got !== LEGACY_AUTH_TOKEN) return unauthorized(res);
+        if (bearer !== LEGACY_AUTH_TOKEN) return unauthorized(res);
+      } else if (!bearer) {
+        // No legacy token configured AND no Bearer → require global auth
+        return unauthorized(res, "Askine", prmUrl);
       }
       await handleMcpRequest({
         req, res,
-        adapterMode: ENDPOINT_SUFFIXES[route.suffix],
+        adapterMode,
         tenant: null,
         studentId: null,
         accessibleCourseIds: null,

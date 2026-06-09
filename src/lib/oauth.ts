@@ -108,7 +108,10 @@ export async function registerClient(args: {
 
 export interface IssueCodeArgs {
   clientId: string;
-  studentId: string;
+  /** Tenant-scoped student id (legacy path). Phase 5+ prefers mcpUserId. */
+  studentId?: string;
+  /** Global mcp_user id (Phase 5+ global MCP path). */
+  mcpUserId?: string;
   redirectUri: string;
   scopes: string[];
   codeChallenge: string;
@@ -121,7 +124,8 @@ export async function issueAuthorizationCode(args: IssueCodeArgs): Promise<strin
   await sb.insert("oauth_authorization_codes", {
     code_hash: sha256(code),
     client_id: args.clientId,
-    student_id: args.studentId,
+    student_id: args.studentId ?? null,
+    mcp_user_id: args.mcpUserId ?? null,
     redirect_uri: args.redirectUri,
     scopes: args.scopes,
     code_challenge: args.codeChallenge,
@@ -134,7 +138,8 @@ export async function issueAuthorizationCode(args: IssueCodeArgs): Promise<strin
 interface AuthCodeRow {
   code_hash: string;
   client_id: string;
-  student_id: string;
+  student_id: string | null;
+  mcp_user_id: string | null;
   redirect_uri: string;
   scopes: string[];
   code_challenge: string | null;
@@ -147,7 +152,8 @@ interface AuthCodeRow {
  *  expiry / already-consumed / not found. Caller must verify PKCE. */
 export async function consumeAuthorizationCode(code: string): Promise<{
   clientId: string;
-  studentId: string;
+  studentId: string | null;
+  mcpUserId: string | null;
   redirectUri: string;
   scopes: string[];
   codeChallenge: string | null;
@@ -166,6 +172,7 @@ export async function consumeAuthorizationCode(code: string): Promise<{
   return {
     clientId: row.client_id,
     studentId: row.student_id,
+    mcpUserId: row.mcp_user_id,
     redirectUri: row.redirect_uri,
     scopes: row.scopes,
     codeChallenge: row.code_challenge,
@@ -182,9 +189,13 @@ export interface IssuedTokens {
 
 export async function issueTokens(args: {
   clientId: string;
-  studentId: string;
+  studentId?: string;
+  mcpUserId?: string;
   scopes: string[];
 }): Promise<IssuedTokens> {
+  if (!args.studentId && !args.mcpUserId) {
+    throw new Error("issueTokens needs either studentId or mcpUserId");
+  }
   const accessToken = randomToken();
   const refreshToken = randomToken();
   const issuedAt = new Date().toISOString();
@@ -194,7 +205,8 @@ export async function issueTokens(args: {
   await sb.insert("oauth_access_tokens", {
     token_hash: sha256(accessToken),
     client_id: args.clientId,
-    student_id: args.studentId,
+    student_id: args.studentId ?? null,
+    mcp_user_id: args.mcpUserId ?? null,
     scopes: args.scopes,
     issued_at: issuedAt,
     expires_at: accessExpires,
@@ -203,7 +215,8 @@ export async function issueTokens(args: {
   await sb.insert("oauth_refresh_tokens", {
     token_hash: sha256(refreshToken),
     client_id: args.clientId,
-    student_id: args.studentId,
+    student_id: args.studentId ?? null,
+    mcp_user_id: args.mcpUserId ?? null,
     issued_at: issuedAt,
     expires_at: refreshExpires,
   }, { returning: "minimal" });
@@ -214,7 +227,8 @@ export async function issueTokens(args: {
 interface AccessTokenRow {
   token_hash: string;
   client_id: string;
-  student_id: string;
+  student_id: string | null;
+  mcp_user_id: string | null;
   scopes: string[];
   expires_at: string;
   revoked_at: string | null;
@@ -223,7 +237,8 @@ interface AccessTokenRow {
 /** Validates a Bearer access token. Returns claims or null. */
 export async function validateAccessToken(token: string): Promise<{
   clientId: string;
-  studentId: string;
+  studentId: string | null;
+  mcpUserId: string | null;
   scopes: string[];
 } | null> {
   const row = await sb.selectOne<AccessTokenRow>(
@@ -236,6 +251,7 @@ export async function validateAccessToken(token: string): Promise<{
   return {
     clientId: row.client_id,
     studentId: row.student_id,
+    mcpUserId: row.mcp_user_id,
     scopes: row.scopes,
   };
 }

@@ -15,6 +15,7 @@ import { searchChunksForCourse } from "./lib/store-pg.ts";
 import { recordToolCall, recordSearchQuery } from "./lib/analytics.ts";
 import { recordPlayLesson, getProgressForCourse } from "./lib/student-progress.ts";
 import { checkAndCount } from "./lib/rate-limit.ts";
+import type { McpUser, AccessibleCourse } from "./lib/mcp-users.ts";
 
 // ChatGPT Apps SDK widget URI for the lesson player. Registered as an MCP
 // resource on /mcp-gpt; referenced from play_lesson's `openai/outputTemplate`.
@@ -38,30 +39,44 @@ const PLAYER_WIDGET_URI = "ui://widget/lesson-player.html";
  * Legacy sessions pass null and skip the check.
  */
 export interface AuthCtx {
+  /** Legacy tenant-scoped Bearer (per-tenant student record). */
   studentId: string | null;
   accessibleCourseIds: string[] | null;
+  /** Global Bearer (Phase 5+): single email identity, cross-tenant. */
+  mcpUser?: McpUser | null;
+  accessibleCourses?: AccessibleCourse[] | null;
 }
 
 export function buildServer(
   adapterMode: AdapterMode = "mcpApps",
   tenant: Tenant | null = null,
-  auth: AuthCtx = { studentId: null, accessibleCourseIds: null },
+  auth: AuthCtx = { studentId: null, accessibleCourseIds: null, mcpUser: null, accessibleCourses: null },
 ): McpServer {
+  const isGlobal = !!auth.mcpUser;
   const server = new McpServer(
     {
-      name: tenant ? `askine-${tenant.slug}` : "agentclass",
+      name: isGlobal ? "askine" : tenant ? `askine-${tenant.slug}` : "agentclass",
       version: "0.1.0",
     },
     {
       capabilities: { tools: {}, resources: {} },
-      instructions: [
-        "Você é o tutor do micro-curso de Produtificação (13 aulas) do projeto VMA.",
-        "Sempre que o aluno fizer perguntas sobre o conteúdo, use search_course para fundamentar a resposta",
-        "nos trechos reais das aulas — cite o número da aula e o timestamp.",
-        "Quando fizer sentido mostrar o vídeo, chame play_lesson com startSec apontando para o trecho",
-        "que melhor responde a pergunta.",
-        "Responda em português brasileiro, didático mas direto.",
-      ].join(" "),
+      instructions: isGlobal
+        ? [
+            "Você é o tutor agêntico Askine. O usuário tem acesso a um ou mais cursos de diferentes infoprodutores.",
+            "Primeiro use list_courses para ver quais cursos o aluno tem acesso. Depois identifique pela pergunta",
+            "qual curso é relevante e use o courseId nas próximas chamadas. Quando ambíguo, pergunte ao aluno.",
+            "Sempre use search_course pra fundamentar respostas em trechos reais das aulas — cite aula e timestamp.",
+            "Quando fizer sentido mostrar o vídeo, chame play_lesson com startSec apontando para o trecho.",
+            "Responda em português brasileiro, didático mas direto.",
+          ].join(" ")
+        : [
+            "Você é o tutor do micro-curso de Produtificação (13 aulas) do projeto VMA.",
+            "Sempre que o aluno fizer perguntas sobre o conteúdo, use search_course para fundamentar a resposta",
+            "nos trechos reais das aulas — cite o número da aula e o timestamp.",
+            "Quando fizer sentido mostrar o vídeo, chame play_lesson com startSec apontando para o trecho",
+            "que melhor responde a pergunta.",
+            "Responda em português brasileiro, didático mas direto.",
+          ].join(" "),
     },
   );
 
@@ -181,17 +196,55 @@ export function buildServer(
     | { mode: "tenant"; course: Course }
     | { mode: "error"; message: string };
 
-  async function resolveCourseCtx(courseSlug?: string): Promise<CourseCtx> {
+  async function resolveCourseCtx(args: { courseId?: string; courseSlug?: string } = {}): Promise<CourseCtx> {
+    // ----- Global mode (Phase 5+): cross-tenant courses by UUID or slug -----
+    if (isGlobal) {
+      const accessible = auth.accessibleCourses ?? [];
+      if (!accessible.length) {
+        return { mode: "error", message: "Você ainda não tem acesso a nenhum curso. Confirme que comprou o curso no Hotmart e aguarde alguns minutos." };
+      }
+      if (args.courseId) {
+        const hit = accessible.find((c) => c.courseId === args.courseId);
+        if (!hit) return { mode: "error", message: `Você não tem acesso ao courseId "${args.courseId}".` };
+        return { mode: "tenant", course: {
+          id: hit.courseId, tenantId: hit.tenantId, name: hit.courseName,
+          slug: hit.courseSlug, sourceType: "panda", ingestStatus: "ready",
+        } };
+      }
+      if (args.courseSlug) {
+        const matches = accessible.filter((c) => c.courseSlug === args.courseSlug);
+        if (matches.length === 1) {
+          const hit = matches[0];
+          return { mode: "tenant", course: {
+            id: hit.courseId, tenantId: hit.tenantId, name: hit.courseName,
+            slug: hit.courseSlug, sourceType: "panda", ingestStatus: "ready",
+          } };
+        }
+        if (matches.length > 1) {
+          const list = matches.map((c) => `  - ${c.displayName} (courseId: ${c.courseId})`).join("\n");
+          return { mode: "error", message: `Mais de um curso com slug "${args.courseSlug}". Use o courseId:\n${list}` };
+        }
+      }
+      if (accessible.length === 1) {
+        const hit = accessible[0];
+        return { mode: "tenant", course: {
+          id: hit.courseId, tenantId: hit.tenantId, name: hit.courseName,
+          slug: hit.courseSlug, sourceType: "panda", ingestStatus: "ready",
+        } };
+      }
+      const list = accessible.map((c) => `  - ${c.displayName} (courseId: ${c.courseId})`).join("\n");
+      return { mode: "error", message: `Mais de um curso disponível. Use list_courses pra ver os IDs e passe courseId:\n${list}` };
+    }
+
+    // ----- Legacy single-tenant mode -----
     if (!tenant) return { mode: "legacy" };
 
-    // Tenant mode requires an authenticated student with access claims.
-    // Without claims (e.g. session not yet through OAuth), bail.
+    // ----- Tenant-scoped mode (per-tenant Bearer) -----
     if (!auth.studentId || auth.accessibleCourseIds === null) {
       return { mode: "error", message: "Sessão sem autenticação válida. Faça login novamente." };
     }
     const accessible = new Set(auth.accessibleCourseIds);
-
-    const r = await resolveCourse(tenant.id, courseSlug);
+    const r = await resolveCourse(tenant.id, args.courseSlug);
     if (r.ok) {
       if (!accessible.has(r.course.id)) {
         return {
@@ -202,29 +255,16 @@ export function buildServer(
       return { mode: "tenant", course: r.course };
     }
     if (r.reason === "ambiguous") {
-      // Filter to courses the student can access — disambiguate from the
-      // student's perspective, not the tenant's full catalog.
       const owned = r.available.filter((c) => accessible.has(c.id));
       if (owned.length === 1) return { mode: "tenant", course: owned[0] };
-      if (owned.length === 0) {
-        return { mode: "error", message: "Você não tem acesso a nenhum curso deste tenant ainda." };
-      }
+      if (owned.length === 0) return { mode: "error", message: "Você não tem acesso a nenhum curso deste tenant ainda." };
       const list = owned.map((c) => `  - ${c.slug}: ${c.name}`).join("\n");
-      return {
-        mode: "error",
-        message: `Há mais de um curso disponível. Forneça \`courseSlug\` em algum dos seguintes:\n${list}`,
-      };
+      return { mode: "error", message: `Há mais de um curso disponível. Forneça \`courseSlug\` em algum dos seguintes:\n${list}` };
     }
     if (r.available.length === 0) {
-      return {
-        mode: "error",
-        message: `Nenhum curso ativo encontrado para este tenant. Aguarde o ingest concluir.`,
-      };
+      return { mode: "error", message: `Nenhum curso ativo encontrado para este tenant. Aguarde o ingest concluir.` };
     }
-    return {
-      mode: "error",
-      message: `Curso "${courseSlug}" não encontrado.`,
-    };
+    return { mode: "error", message: `Curso "${args.courseSlug}" não encontrado.` };
   }
 
   // courseSlug is added to every tool's inputSchema so multi-course tenants
@@ -233,6 +273,13 @@ export function buildServer(
     .string()
     .optional()
     .describe("Slug do curso (omita se o tenant tem apenas 1 curso ativo)");
+
+  // courseId is the global UUID — preferred in /mcp (global) mode where
+  // slugs collide across tenants. Get the UUID from list_courses output.
+  const courseIdField = z
+    .string()
+    .optional()
+    .describe("UUID do curso (preferido no modo global; obtido via list_courses)");
 
   // Telemetry helper — fires only for tenant sessions (skips legacy MVP).
   // All inserts are async fire-and-forget; never blocks the tool response.
@@ -285,7 +332,7 @@ export function buildServer(
     {
       title: "Listar aulas do curso",
       description: "Lista todas as aulas do curso com número, título e duração. Use isto para dar uma visão geral ou quando o aluno perguntar 'o que tem no curso'.",
-      inputSchema: { courseSlug: courseSlugField },
+      inputSchema: { courseId: courseIdField, courseSlug: courseSlugField },
       outputSchema: {
         courseName: z.string(),
         lessons: z.array(z.object({
@@ -298,11 +345,11 @@ export function buildServer(
       },
       annotations: readOnlyAnnotations,
     },
-    async ({ courseSlug }) => {
+    async ({ courseId, courseSlug }) => {
       const t0 = Date.now();
       const limited = await rateLimitOrError("list_lessons");
       if (limited) return limited;
-      const ctx = await resolveCourseCtx(courseSlug);
+      const ctx = await resolveCourseCtx({ courseId, courseSlug });
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
       }
@@ -356,7 +403,7 @@ export function buildServer(
       title: "Detalhes de uma aula",
       description: "Retorna metadados e (opcionalmente) a transcrição completa de uma aula. Forneça lessonNumber OU lessonId.",
       inputSchema: {
-        courseSlug: courseSlugField,
+        courseId: courseIdField, courseSlug: courseSlugField,
         lessonNumber: z.number().int().min(1).max(99).optional().describe("Número da aula"),
         lessonId: z.string().optional().describe("UUID da aula"),
         includeFullTranscript: z.boolean().optional().default(false).describe("Se true, inclui a transcrição completa. Default: false."),
@@ -371,11 +418,11 @@ export function buildServer(
       },
       annotations: readOnlyAnnotations,
     },
-    async ({ courseSlug, lessonNumber, lessonId, includeFullTranscript }) => {
+    async ({ courseId, courseSlug, lessonNumber, lessonId, includeFullTranscript }) => {
       const t0 = Date.now();
       const limited = await rateLimitOrError("get_lesson");
       if (limited) return limited;
-      const ctx = await resolveCourseCtx(courseSlug);
+      const ctx = await resolveCourseCtx({ courseId, courseSlug });
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
       }
@@ -448,7 +495,7 @@ export function buildServer(
       title: "Buscar no conteúdo do curso",
       description: "Busca semântica nas transcrições e materiais do curso. Use isto sempre que o aluno perguntar sobre um conceito — retorna trechos relevantes com aula e timestamp para fundamentar a resposta.",
       inputSchema: {
-        courseSlug: courseSlugField,
+        courseId: courseIdField, courseSlug: courseSlugField,
         query: z.string().min(2).describe("Pergunta ou termo em linguagem natural"),
         limit: z.number().int().min(1).max(15).optional().default(5),
         lessonNumber: z.number().int().min(1).max(99).optional().describe("Restringe a busca a uma aula específica"),
@@ -466,11 +513,11 @@ export function buildServer(
       },
       annotations: readOnlyAnnotations,
     },
-    async ({ courseSlug, query, limit, lessonNumber }) => {
+    async ({ courseId, courseSlug, query, limit, lessonNumber }) => {
       const t0 = Date.now();
       const limited = await rateLimitOrError("search_course");
       if (limited) return limited;
-      const ctx = await resolveCourseCtx(courseSlug);
+      const ctx = await resolveCourseCtx({ courseId, courseSlug });
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
       }
@@ -559,7 +606,7 @@ export function buildServer(
       title: "Renderizar player da aula no chat",
       description: "Renderiza o player de vídeo Panda inline no chat, opcionalmente começando em um timestamp. Use quando o aluno pedir 'me mostra essa parte' ou quando uma resposta se beneficie de ver o vídeo.",
       inputSchema: {
-        courseSlug: courseSlugField,
+        courseId: courseIdField, courseSlug: courseSlugField,
         lessonNumber: z.number().int().min(1).max(99).optional().describe("Número da aula"),
         lessonId: z.string().optional().describe("UUID da aula"),
         startSec: z.number().min(0).optional().describe("Segundo no qual começar a reprodução (deep-link)"),
@@ -593,11 +640,11 @@ export function buildServer(
           : {}),
       },
     },
-    async ({ courseSlug, lessonNumber, lessonId, startSec }) => {
+    async ({ courseId, courseSlug, lessonNumber, lessonId, startSec }) => {
       const t0 = Date.now();
       const limited = await rateLimitOrError("play_lesson");
       if (limited) return limited;
-      const ctx = await resolveCourseCtx(courseSlug);
+      const ctx = await resolveCourseCtx({ courseId, courseSlug });
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
       }
@@ -679,7 +726,7 @@ export function buildServer(
       title: "Trecho exato da transcrição",
       description: "Retorna a transcrição literal entre dois timestamps de uma aula. Útil para citar o instrutor com precisão.",
       inputSchema: {
-        courseSlug: courseSlugField,
+        courseId: courseIdField, courseSlug: courseSlugField,
         lessonNumber: z.number().int().min(1).max(99).optional(),
         lessonId: z.string().optional(),
         startSec: z.number().min(0),
@@ -694,11 +741,11 @@ export function buildServer(
       },
       annotations: readOnlyAnnotations,
     },
-    async ({ courseSlug, lessonNumber, lessonId, startSec, endSec }) => {
+    async ({ courseId, courseSlug, lessonNumber, lessonId, startSec, endSec }) => {
       const t0 = Date.now();
       const limited = await rateLimitOrError("excerpt_transcript");
       if (limited) return limited;
-      const ctx = await resolveCourseCtx(courseSlug);
+      const ctx = await resolveCourseCtx({ courseId, courseSlug });
       if (ctx.mode === "error") {
         return { isError: true, content: [{ type: "text", text: ctx.message }] };
       }
@@ -742,20 +789,24 @@ export function buildServer(
     },
   );
 
-  // Tenant-only: list courses available to the student. Single-tenant legacy
-  // mode never has this tool registered — there's only one course (VMA).
-  if (tenant) {
+  // list_courses is registered in both tenant-scoped and global modes.
+  // Global mode returns cross-tenant courses with a `${infoprodutor} —
+  // ${curso}` display name and the courseId UUID. Tenant mode keeps
+  // the per-tenant catalog. Legacy MVP single-tenant skips it.
+  if (tenant || isGlobal) {
     server.registerTool(
       "list_courses",
       {
-        title: "Listar cursos do tenant",
-        description: "Lista todos os cursos ativos do tenant. Use isto quando o aluno quiser saber quais cursos pode acessar, ou pra escolher um curso quando há mais de um.",
+        title: "Listar seus cursos",
+        description: "Lista todos os cursos que o aluno tem acesso. Use isto SEMPRE no início pra descobrir o courseId. Em modo global, retorna cursos de múltiplos infoprodutores.",
         inputSchema: {},
         outputSchema: {
           courses: z.array(z.object({
+            courseId: z.string(),
             slug: z.string(),
             name: z.string(),
-            ingestStatus: z.string(),
+            tenantName: z.string().optional(),
+            displayName: z.string().optional(),
           })),
         },
         annotations: readOnlyAnnotations,
@@ -764,15 +815,49 @@ export function buildServer(
         const t0 = Date.now();
         const limited = await rateLimitOrError("list_courses");
         if (limited) return limited;
+
+        // ----- Global mode: cross-tenant courses -----
+        if (isGlobal) {
+          const courses = auth.accessibleCourses ?? [];
+          logTool({
+            toolName: "list_courses",
+            input: {},
+            courseId: null,
+            output: { count: courses.length, mode: "global" },
+            latencyMs: Date.now() - t0,
+          });
+          if (!courses.length) {
+            return {
+              content: [{ type: "text", text: "Você ainda não tem acesso a nenhum curso. Confirme que comprou no Hotmart." }],
+              structuredContent: { courses: [] },
+            };
+          }
+          const text = `# Seus cursos (${courses.length})\n\n` +
+            courses.map((c, i) => `${i + 1}. **${c.displayName}** \`(courseId: ${c.courseId})\``).join("\n");
+          return {
+            content: [{ type: "text", text }],
+            structuredContent: {
+              courses: courses.map((c) => ({
+                courseId: c.courseId,
+                slug: c.courseSlug,
+                name: c.courseName,
+                tenantName: c.tenantName,
+                displayName: c.displayName,
+              })),
+            },
+          };
+        }
+
+        // ----- Tenant-scoped mode -----
         const { listCoursesForTenant } = await import("./lib/courses.ts");
-        const all = await listCoursesForTenant(tenant.id);
+        const all = await listCoursesForTenant(tenant!.id);
         const accessible = new Set(auth.accessibleCourseIds ?? []);
         const courses = all.filter((c) => accessible.has(c.id));
         logTool({
           toolName: "list_courses",
           input: {},
           courseId: null,
-          output: { count: courses.length },
+          output: { count: courses.length, mode: "tenant" },
           latencyMs: Date.now() - t0,
         });
         if (!courses.length) {
@@ -782,11 +867,11 @@ export function buildServer(
           };
         }
         const text = `# Seus cursos (${courses.length})\n\n` +
-          courses.map((c, i) => `${i + 1}. **${c.name}** \`(slug: ${c.slug})\``).join("\n");
+          courses.map((c, i) => `${i + 1}. **${c.name}** \`(courseId: ${c.id})\``).join("\n");
         return {
           content: [{ type: "text", text }],
           structuredContent: {
-            courses: courses.map((c) => ({ slug: c.slug, name: c.name, ingestStatus: c.ingestStatus })),
+            courses: courses.map((c) => ({ courseId: c.id, slug: c.slug, name: c.name })),
           },
         };
       },
@@ -798,7 +883,7 @@ export function buildServer(
       {
         title: "Meu progresso no curso",
         description: "Mostra as aulas que você já tocou no chat e onde parou. Use quando o aluno perguntar 'em que aula eu estou?' ou 'o que já vi?'.",
-        inputSchema: { courseSlug: courseSlugField },
+        inputSchema: { courseId: courseIdField, courseSlug: courseSlugField },
         outputSchema: {
           courseName: z.string(),
           totalLessons: z.number(),
@@ -814,11 +899,11 @@ export function buildServer(
         },
         annotations: readOnlyAnnotations,
       },
-      async ({ courseSlug }) => {
+      async ({ courseId, courseSlug }) => {
         const t0 = Date.now();
         const limited = await rateLimitOrError("get_my_progress");
         if (limited) return limited;
-        const ctx = await resolveCourseCtx(courseSlug);
+        const ctx = await resolveCourseCtx({ courseId, courseSlug });
         if (ctx.mode !== "tenant") {
           return { isError: true, content: [{ type: "text", text: ctx.mode === "error" ? ctx.message : "Progresso só disponível em sessões autenticadas." }] };
         }
