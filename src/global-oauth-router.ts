@@ -83,6 +83,11 @@ async function discoveryAS(_req: IncomingMessage, res: ServerResponse): Promise<
     token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
     scopes_supported: ["mcp"],
     service_documentation: `${base}/docs`,
+    // RFC 8414 §2: pointers to the authorization server's privacy
+    // policy and terms of service. Apps Directory submissions require
+    // these for legal review.
+    op_policy_uri: `${base}/privacy`,
+    op_tos_uri: `${base}/terms`,
   });
 }
 
@@ -93,6 +98,9 @@ async function discoveryPRM(_req: IncomingMessage, res: ServerResponse): Promise
     authorization_servers: [base],
     scopes_supported: ["mcp"],
     bearer_methods_supported: ["header"],
+    resource_documentation: `${base}/docs`,
+    resource_policy_uri: `${base}/privacy`,
+    resource_tos_uri: `${base}/terms`,
   });
 }
 

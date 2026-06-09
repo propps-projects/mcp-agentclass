@@ -180,17 +180,47 @@ const CSS = `
   .msg{padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:13px}
   .msg.error{background:#7f1d1d;color:#fecaca}
   .msg.success{background:#064e3b;color:#a7f3d0}
+  footer.site{max-width:1100px;margin:64px auto 32px;padding:24px;border-top:1px solid #1e293b;display:flex;flex-wrap:wrap;gap:24px;font-size:13px;color:#64748b}
+  footer.site a{color:#94a3b8;text-decoration:none}
+  footer.site a:hover{color:#fff}
+  footer.site .col{display:flex;flex-direction:column;gap:6px}
+  footer.site .col strong{color:#cbd5e1;text-transform:uppercase;font-size:11px;letter-spacing:1px;margin-bottom:4px}
 `;
 
 const NAV = `
   <div class="nav">
-    <div class="brand">Askine</div>
+    <div class="brand"><a href="/" style="color:#60a5fa;text-decoration:none">Askine</a></div>
     <div style="flex:1"></div>
     <a href="/pricing">Pricing</a>
     <a href="/docs">Docs</a>
     <a href="/status">Status</a>
     <a href="/signup">Começar</a>
   </div>`;
+
+const FOOTER = `
+  <footer class="site">
+    <div class="col">
+      <strong>Produto</strong>
+      <a href="/pricing">Pricing</a>
+      <a href="/docs">Documentação</a>
+      <a href="/status">Status</a>
+    </div>
+    <div class="col">
+      <strong>Empresa</strong>
+      <a href="/about">Sobre</a>
+      <a href="/enterprise">Enterprise</a>
+      <a href="/contact">Contato</a>
+    </div>
+    <div class="col">
+      <strong>Legal</strong>
+      <a href="/privacy">Privacidade</a>
+      <a href="/terms">Termos</a>
+    </div>
+    <div style="flex:1;text-align:right">
+      <div style="color:#64748b">© 2026 Propps Media · CNPJ 35.735.278/0001-91</div>
+      <div style="margin-top:4px"><a href="/contact">rafael@infosaas.co</a></div>
+    </div>
+  </footer>`;
 
 function fmtBytes(n: number | null): string {
   if (n == null) return "ilimitado";
@@ -227,7 +257,7 @@ ${NAV}
             : `<div style="color:#fbbf24;font-size:12px;text-align:center">Em breve</div>`}
       </div>`).join("")}
   </div>
-</main>`;
+</main>${FOOTER}`;
 }
 
 function signupHtml(args: { plans: Array<Pick<PlanPublic, "id" | "name" | "monthly_price_brl" | "validapay_price_id">>; selected: string; error?: string }): string {
@@ -254,7 +284,7 @@ ${NAV}
        <a href="mailto:rafael@infosaas.co" style="color:#60a5fa">rafael@infosaas.co</a>
        e eu te coloco manualmente.</p>
   </div>
-</main>`;
+</main>${FOOTER}`;
   }
 
   return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Começar — Askine</title>
@@ -282,7 +312,7 @@ ${NAV}
     </form>
     <p style="font-size:12px;color:#94a3b8;margin-top:12px">Você será redirecionado pro ValidaPay pra finalizar o pagamento.</p>
   </div>
-</main>`;
+</main>${FOOTER}`;
 }
 
 function signupSuccessFallbackHtml(args: { tenant: { slug: string }; email: string }): string {
@@ -297,7 +327,7 @@ ${NAV}
     <p><a class="btn" href="/t/${esc(args.tenant.slug)}/admin/login">Entrar no admin</a></p>
     <p style="font-size:12px;color:#94a3b8;margin-top:16px">Login via magic link enviado pra <code>${esc(args.email)}</code>.</p>
   </div>
-</main>`;
+</main>${FOOTER}`;
 }
 
 // ----- Router --------------------------------------------------------------
@@ -310,7 +340,15 @@ export type PublicRouteMatch =
   | { type: "status-json" }
   | { type: "docs" }
   | { type: "enterprise-get" }
-  | { type: "enterprise-post" };
+  | { type: "enterprise-post" }
+  | { type: "privacy" }
+  | { type: "terms" }
+  | { type: "contact" }
+  | { type: "about" }
+  | { type: "logo-svg" }
+  | { type: "favicon" }
+  | { type: "og-image" }
+  | { type: "home" };
 
 export function matchPublicRoute(path: string, method: string): PublicRouteMatch | null {
   const p = path.split("?")[0];
@@ -322,6 +360,14 @@ export function matchPublicRoute(path: string, method: string): PublicRouteMatch
   if (method === "GET"  && p === "/docs")    return { type: "docs" };
   if (method === "GET"  && p === "/enterprise") return { type: "enterprise-get" };
   if (method === "POST" && p === "/enterprise") return { type: "enterprise-post" };
+  if (method === "GET"  && p === "/privacy")    return { type: "privacy" };
+  if (method === "GET"  && p === "/terms")      return { type: "terms" };
+  if (method === "GET"  && p === "/contact")    return { type: "contact" };
+  if (method === "GET"  && p === "/about")      return { type: "about" };
+  if (method === "GET"  && p === "/logo.svg")   return { type: "logo-svg" };
+  if (method === "GET"  && p === "/favicon.ico") return { type: "favicon" };
+  if (method === "GET"  && p === "/og-image.svg") return { type: "og-image" };
+  if (method === "GET"  && (p === "/" || p === "")) return { type: "home" };
   return null;
 }
 
@@ -339,7 +385,424 @@ export async function handlePublicRoute(
     case "docs":        return docsPage(req, res);
     case "enterprise-get":  return enterpriseGet(req, res);
     case "enterprise-post": return enterprisePost(req, res);
+    case "privacy":         return legalPage(res, "privacy");
+    case "terms":           return legalPage(res, "terms");
+    case "contact":         return legalPage(res, "contact");
+    case "about":           return legalPage(res, "about");
+    case "logo-svg":        return assetPage(res, LOGO_SVG, "image/svg+xml");
+    case "favicon":         return assetPage(res, FAVICON_SVG, "image/svg+xml");
+    case "og-image":        return assetPage(res, OG_IMAGE_SVG, "image/svg+xml");
+    case "home":            return homePage(req, res);
   }
+}
+
+// ---------- Assets (Phase 6.2) ----------------------------------------
+
+function assetPage(res: ServerResponse, body: string, contentType: string): void {
+  res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+  res.writeHead(200, { "Content-Type": contentType });
+  res.end(body);
+}
+
+// Minimal SVG logo — "A" mark with a blue→cyan gradient. Placeholder
+// until you commission real branding. Renders at any size.
+const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <path d="M20 46 L32 18 L44 46 M25 38 L39 38" stroke="#f1f5f9" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+const FAVICON_SVG = LOGO_SVG;
+
+// 1200×630 Open Graph card — gradient background + Askine wordmark +
+// tagline. Will render fine on social previews; replace with a real
+// 1200×630 PNG once you have one.
+const OG_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <g transform="translate(120, 200)">
+    <rect width="120" height="120" rx="26" fill="url(#mark)"/>
+    <path d="M36 92 L60 28 L84 92 M44 76 L76 76" stroke="#f1f5f9" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="280" y="280" font-family="system-ui, -apple-system, sans-serif" font-size="92" font-weight="700" fill="#f1f5f9">Askine</text>
+  <text x="280" y="340" font-family="system-ui, -apple-system, sans-serif" font-size="32" fill="#94a3b8">Tutor agêntico via MCP para infoprodutores</text>
+  <text x="120" y="540" font-family="system-ui, -apple-system, sans-serif" font-size="22" fill="#64748b">Claude.ai · ChatGPT · OpenAI Whisper · pgvector</text>
+</svg>`;
+
+// ---------- Home (Phase 6.2) ------------------------------------------
+
+async function homePage(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  html(res, 200, homeHtml());
+}
+
+function homeHtml(): string {
+  return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Askine — Tutor agêntico via MCP</title>
+<meta name="description" content="Transforme cursos em vídeo em tutores agênticos. Aluno conversa com Claude.ai ou ChatGPT sobre o conteúdo do curso usando MCP.">
+${OG_META(esc("Askine — Tutor agêntico via MCP"), "Transforme cursos em vídeo em tutores agênticos para Claude.ai e ChatGPT.")}
+<style>${CSS}
+  .hero { padding:64px 0 32px; text-align:center }
+  .hero h1 { font-size:48px; margin-bottom:16px }
+  .hero .grad { background:linear-gradient(135deg,#3b82f6,#06b6d4);-webkit-background-clip:text;background-clip:text;color:transparent }
+  .hero p.sub { font-size:18px; max-width:640px; margin:0 auto 32px }
+  .cta-row { display:flex; gap:12px; justify-content:center; flex-wrap:wrap }
+  .secondary { background:#1e293b !important; border:1px solid #334155 }
+  .features-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; margin-top:48px }
+  .feature { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:24px }
+  .feature h3 { margin:0 0 8px; color:#f1f5f9; font-size:18px }
+  .feature p { font-size:14px; color:#94a3b8; margin:0 }
+  .feature .icon { font-size:24px; margin-bottom:8px }
+</style>
+${NAV}
+<main>
+  <div class="hero">
+    <h1>Seu curso virou um <span class="grad">tutor agêntico</span></h1>
+    <p class="sub">Aluno conversa com Claude.ai ou ChatGPT sobre o conteúdo do curso. A IA responde com base nas aulas reais — citando o trecho exato e mostrando o vídeo no minuto certo.</p>
+    <div class="cta-row">
+      <a class="btn" href="/signup">Começar trial 14 dias</a>
+      <a class="btn secondary" href="/docs">Ver como funciona</a>
+    </div>
+  </div>
+
+  <div class="features-grid">
+    <div class="feature">
+      <div class="icon">🎓</div>
+      <h3>Whisper transcreve</h3>
+      <p>Cada aula vira texto. Não precisa fornecer transcrição.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🔎</div>
+      <h3>Busca semântica</h3>
+      <p>pgvector + embeddings. Aluno pergunta, IA acha o trecho certo.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">▶️</div>
+      <h3>Vídeo no chat</h3>
+      <p>Tool play_lesson mostra o vídeo da aula no Claude.ai começando no minuto exato.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🛒</div>
+      <h3>Webhook Hotmart</h3>
+      <p>Vendeu, liberou. Aluno logga com o email da compra.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🔐</div>
+      <h3>OAuth + LGPD</h3>
+      <p>OAuth 2.1 + PKCE. Secrets criptografados em repouso. LGPD-aware.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">📊</div>
+      <h3>Insights por curso</h3>
+      <p>Sabe quais aulas o aluno toca mais, o que ele pergunta, onde para.</p>
+    </div>
+  </div>
+
+  <h2 style="text-align:center;margin-top:64px">Aluno conecta uma vez. Vê todos os cursos.</h2>
+  <p style="text-align:center;color:#94a3b8;max-width:680px;margin:0 auto 32px">Conector global no Claude.ai e ChatGPT. Aluno entra com email da compra, vê todos os cursos que comprou — não importa de qual infoprodutor.</p>
+  <div style="text-align:center;margin-bottom:64px">
+    <a class="btn" href="/pricing">Ver planos</a>
+  </div>
+</main>${FOOTER}`;
+}
+
+function OG_META(title: string, description: string): string {
+  return `
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <meta property="og:title" content="${title}">
+  <meta property="og:description" content="${description}">
+  <meta property="og:image" content="/og-image.svg">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${title}">
+  <meta name="twitter:description" content="${description}">
+  <meta name="twitter:image" content="/og-image.svg">`;
+}
+
+// ---------- Legal + about + contact (Phase 6.1) ----------------------
+
+function legalPage(res: ServerResponse, kind: "privacy" | "terms" | "contact" | "about"): void {
+  const body = kind === "privacy" ? privacyHtml()
+             : kind === "terms"   ? termsHtml()
+             : kind === "contact" ? contactHtml()
+             : aboutHtml();
+  const title = kind === "privacy" ? "Política de Privacidade"
+              : kind === "terms"   ? "Termos de Uso"
+              : kind === "contact" ? "Contato"
+              : "Sobre a Askine";
+  html(res, 200, `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>${esc(title)} — Askine</title>
+<style>${CSS}
+  article { max-width:760px; margin:0 auto; line-height:1.7; color:#cbd5e1 }
+  article h2 { margin-top:32px; font-size:20px; color:#f1f5f9 }
+  article h3 { margin-top:20px; font-size:16px; color:#e2e8f0 }
+  article p, article ul { font-size:15px }
+  article ul { padding-left:24px }
+  article li { margin:6px 0 }
+  article code { color:#a5f3fc }
+  .meta { color:#64748b; font-size:13px; border-top:1px solid #334155; margin-top:48px; padding-top:16px }
+  .contact-card { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:28px; margin:24px 0 }
+  .contact-card a { color:#3b82f6; text-decoration:none }
+  .contact-card a:hover { text-decoration:underline }
+</style>
+${NAV}
+<main>
+  <article>
+    <h1>${esc(title)}</h1>
+    ${body}
+    <div class="meta">
+      Última atualização: 09 de junho de 2026 · Askine, marca operada por <strong>Propps Media</strong> (CNPJ 35.735.278/0001-91).
+    </div>
+  </article>
+</main>${FOOTER}`);
+}
+
+function privacyHtml(): string {
+  return `
+    <p>Esta política descreve como a Askine, marca operada pela Propps Media (CNPJ 35.735.278/0001-91), coleta, usa e protege dados pessoais. Estamos em conformidade com a Lei Geral de Proteção de Dados (LGPD — Lei 13.709/2018).</p>
+
+    <h2>1. Dados coletados</h2>
+    <h3>1.1 Do infoprodutor (cliente pagante)</h3>
+    <ul>
+      <li>Nome, email de contato, CPF ou CNPJ — pra emissão de NF e cobrança via ValidaPay</li>
+      <li>Slug e nome do produto, planos contratados</li>
+      <li>Credenciais de integração (Hottok Hotmart, API key Panda Video) — armazenadas criptografadas com AES-256-GCM</li>
+      <li>Logs de operação do painel administrativo</li>
+    </ul>
+
+    <h3>1.2 Do aluno (consumidor final)</h3>
+    <ul>
+      <li>Email — usado como identidade única para login OAuth no MCP</li>
+      <li>Nome (quando fornecido pelo infoprodutor via importação ou pelo Hotmart no webhook)</li>
+      <li>Registros de interação: quais cursos acessou, quais aulas tocou, em que minuto parou</li>
+      <li>Histórico de chamadas a tools para fins de rate limiting e analytics agregados</li>
+    </ul>
+
+    <h2>2. Como usamos</h2>
+    <ul>
+      <li><strong>Autenticação:</strong> validar que o email do aluno tem direito a acessar o curso comprado</li>
+      <li><strong>Funcionamento do tutor:</strong> servir transcrições, embeddings e vídeo player</li>
+      <li><strong>Métricas:</strong> mostrar ao infoprodutor quem está engajado, quais aulas são mais buscadas</li>
+      <li><strong>Cobrança:</strong> processar assinaturas via ValidaPay e emitir NF quando aplicável</li>
+      <li><strong>Comunicação operacional:</strong> magic links de login, notificações de pagamento, alertas críticos</li>
+    </ul>
+
+    <h2>3. Compartilhamento com terceiros</h2>
+    <p>Não vendemos dados. Compartilhamos com processadores quando necessário pra operar o serviço:</p>
+    <ul>
+      <li><strong>Supabase</strong> (Postgres + Storage) — armazenamento dos dados</li>
+      <li><strong>OpenAI</strong> — transcrição via Whisper + geração de embeddings (conteúdo das aulas e queries de busca)</li>
+      <li><strong>Panda Video</strong> — leitura dos vídeos do infoprodutor para download/HLS</li>
+      <li><strong>Resend</strong> — entrega de emails transacionais</li>
+      <li><strong>ValidaPay</strong> — processamento de pagamentos do infoprodutor</li>
+      <li><strong>Hotmart</strong> — webhook de compras (somente quando o infoprodutor configura)</li>
+      <li><strong>Anthropic e OpenAI</strong> — quando o aluno conversa com Claude ou ChatGPT, o conteúdo da conversa passa por essas plataformas (sob suas próprias políticas)</li>
+    </ul>
+
+    <h2>4. Retenção</h2>
+    <ul>
+      <li>Dados de aluno: retidos enquanto a conta do infoprodutor estiver ativa + 6 meses após cancelamento</li>
+      <li>Logs de pagamento: 5 anos (obrigação fiscal brasileira)</li>
+      <li>Logs de tool calls: 90 dias agregados; logs brutos 30 dias</li>
+    </ul>
+
+    <h2>5. Seus direitos (LGPD Art. 18)</h2>
+    <p>Você pode solicitar a qualquer momento:</p>
+    <ul>
+      <li>Confirmação da existência de tratamento</li>
+      <li>Acesso aos dados</li>
+      <li>Correção de dados incompletos, inexatos ou desatualizados</li>
+      <li>Anonimização, bloqueio ou eliminação de dados desnecessários ou tratados em desconformidade</li>
+      <li>Portabilidade dos dados</li>
+      <li>Eliminação dos dados (com ressalvas legais)</li>
+      <li>Informação sobre compartilhamento</li>
+      <li>Revogação do consentimento</li>
+    </ul>
+    <p>Envie a solicitação para <a href="/contact" style="color:#3b82f6">nosso canal de contato</a>. Respondemos em até 15 dias.</p>
+
+    <h2>6. Segurança</h2>
+    <ul>
+      <li>Comunicação por HTTPS em todos os endpoints públicos</li>
+      <li>Credenciais sensíveis criptografadas em repouso (AES-256-GCM)</li>
+      <li>OAuth 2.1 com PKCE S256 obrigatório para acesso ao MCP</li>
+      <li>Sessões assinadas com HMAC-SHA256; chaves rotacionáveis</li>
+      <li>Backup diário automatizado (Supabase PITR de 7 dias)</li>
+    </ul>
+
+    <h2>7. Encarregado de Dados (DPO)</h2>
+    <p>Rafael Almeida Souza — <code>rafael@infosaas.co</code>. Para solicitações formais LGPD, use <a href="/contact" style="color:#3b82f6">/contact</a>.</p>
+
+    <h2>8. Alterações nesta política</h2>
+    <p>Mudanças materiais serão comunicadas com 30 dias de antecedência ao email cadastrado de cada infoprodutor. A data de última atualização aparece no rodapé.</p>
+  `;
+}
+
+function termsHtml(): string {
+  return `
+    <p>Estes termos regem o uso da plataforma <strong>Askine</strong>, marca operada pela <strong>Propps Media Ltda</strong> (CNPJ 35.735.278/0001-91). Ao criar uma conta ou usar o serviço, você concorda com estes termos.</p>
+
+    <h2>1. Definições</h2>
+    <ul>
+      <li><strong>Plataforma:</strong> os serviços técnicos da Askine (painel administrativo, MCP server, processamento de transcrições, busca semântica)</li>
+      <li><strong>Infoprodutor:</strong> pessoa física ou jurídica que contrata um plano para servir seu curso através da Askine</li>
+      <li><strong>Aluno:</strong> consumidor final que comprou um curso do infoprodutor e acessa o tutor via Claude.ai ou ChatGPT</li>
+      <li><strong>Conteúdo:</strong> vídeos, transcrições, materiais e quaisquer ativos que o infoprodutor sirva pela plataforma</li>
+    </ul>
+
+    <h2>2. Contas e cadastro</h2>
+    <ul>
+      <li>Você precisa ter pelo menos 18 anos ou ser representante de uma pessoa jurídica capaz</li>
+      <li>Os dados de cadastro (email, CPF/CNPJ) devem ser verdadeiros e atualizados</li>
+      <li>Você é responsável por manter sigilo das credenciais de acesso</li>
+    </ul>
+
+    <h2>3. Planos e pagamento</h2>
+    <ul>
+      <li>Os planos estão descritos em <a href="/pricing" style="color:#3b82f6">/pricing</a>. As cotas (cursos, horas Whisper, alunos, KB) são por plano e renovam mensalmente</li>
+      <li>Cobrança mensal via ValidaPay. Inadimplência suspende o serviço em D+0 (sem período de carência)</li>
+      <li>Reativação automática no próximo pagamento bem-sucedido</li>
+      <li>Cancelamento a qualquer momento no painel administrativo. Sem multa rescisória</li>
+      <li>Reembolso em até 7 dias do primeiro pagamento (CDC Art. 49)</li>
+    </ul>
+
+    <h2>4. Conteúdo do infoprodutor</h2>
+    <ul>
+      <li>Todo conteúdo (vídeos, transcrições, materiais) é e permanece de propriedade do infoprodutor</li>
+      <li>Você concede à Askine licença não exclusiva pra processar o conteúdo (transcrever, indexar, servir aos seus alunos) enquanto a conta estiver ativa</li>
+      <li>Você é responsável por ter direitos autorais sobre o conteúdo carregado</li>
+      <li>Conteúdo ilegal, fraudulento ou que viole direitos de terceiros é proibido. Reservamos o direito de suspender contas em violação</li>
+    </ul>
+
+    <h2>5. Uso aceitável</h2>
+    <p>Está proibido:</p>
+    <ul>
+      <li>Tentar acessar dados de outros tenants ou alunos</li>
+      <li>Engenharia reversa, scraping em massa ou tentativa de bypass de cotas</li>
+      <li>Distribuição de malware, spam ou phishing</li>
+      <li>Uso pra atividades ilegais sob legislação brasileira</li>
+    </ul>
+
+    <h2>6. Disponibilidade e SLA</h2>
+    <ul>
+      <li>Buscamos disponibilidade ≥ 99,5% em horário comercial. Não garantimos uptime contínuo para planos abaixo de Enterprise</li>
+      <li>Manutenções programadas comunicadas com 48h de antecedência</li>
+      <li>Plano Enterprise tem SLA negociado em contrato dedicado (≥ 99,9%)</li>
+      <li>Política de DR documentada em <a href="https://github.com/propps-projects/mcp-agentclass/blob/main/docs/DR_PLAN.md" style="color:#3b82f6">DR_PLAN.md</a></li>
+    </ul>
+
+    <h2>7. Limitação de responsabilidade</h2>
+    <p>A Askine fornece um serviço técnico de orquestração. Não somos responsáveis por:</p>
+    <ul>
+      <li>Conteúdo educacional do infoprodutor (correção, atualidade, qualidade)</li>
+      <li>Relação comercial entre infoprodutor e aluno (vendas, reembolsos, suporte ao aluno)</li>
+      <li>Falhas em serviços de terceiros (Supabase, OpenAI, Panda, Resend, ValidaPay, Hotmart, Claude.ai, ChatGPT)</li>
+      <li>Lucros cessantes ou danos indiretos decorrentes do uso</li>
+    </ul>
+    <p>Nossa responsabilidade total agregada está limitada ao valor pago nos últimos 12 meses pelo serviço.</p>
+
+    <h2>8. Privacidade</h2>
+    <p>Tratamento de dados pessoais conforme nossa <a href="/privacy" style="color:#3b82f6">Política de Privacidade</a>. Em caso de conflito entre estes termos e a política de privacidade, prevalece a política de privacidade pra questões de dados pessoais.</p>
+
+    <h2>9. Alterações</h2>
+    <p>Podemos atualizar estes termos. Mudanças materiais são comunicadas com 30 dias de antecedência ao email cadastrado. Continuar usando o serviço após o prazo significa aceitar a nova versão.</p>
+
+    <h2>10. Lei aplicável e foro</h2>
+    <p>Estes termos são regidos pela legislação brasileira. Fica eleito o foro da Comarca onde a Propps Media tem sede, com renúncia a qualquer outro, exceto se a legislação consumerista determinar foro do consumidor.</p>
+  `;
+}
+
+function contactHtml(): string {
+  return `
+    <p>Pra falar com a gente, escolha o canal que faz mais sentido:</p>
+
+    <div class="contact-card">
+      <h3 style="margin-top:0">📧 Suporte geral</h3>
+      <p>Dúvidas sobre uso da plataforma, integrações, problemas técnicos.</p>
+      <p><a href="mailto:rafael@infosaas.co">rafael@infosaas.co</a></p>
+      <p style="color:#94a3b8;font-size:13px">Respondo em até 1 dia útil.</p>
+    </div>
+
+    <div class="contact-card">
+      <h3 style="margin-top:0">💼 Vendas / Enterprise</h3>
+      <p>Volume alto, SLA negociado, integrações próprias, contrato dedicado.</p>
+      <p><a href="/enterprise">Formulário Enterprise</a> · <a href="mailto:rafael@infosaas.co">rafael@infosaas.co</a></p>
+    </div>
+
+    <div class="contact-card">
+      <h3 style="margin-top:0">🔒 Privacidade / LGPD</h3>
+      <p>Solicitações de acesso, correção, exclusão de dados pessoais. Encarregado de Dados (DPO): Rafael Almeida Souza.</p>
+      <p><a href="mailto:rafael@infosaas.co?subject=LGPD%20%E2%80%94%20Solicita%C3%A7%C3%A3o">rafael@infosaas.co</a> (assunto: "LGPD")</p>
+      <p style="color:#94a3b8;font-size:13px">Atendimento conforme Art. 18 da LGPD em até 15 dias.</p>
+    </div>
+
+    <div class="contact-card">
+      <h3 style="margin-top:0">🚨 Incidentes de segurança</h3>
+      <p>Vulnerabilidade encontrada, vazamento de dados, suspeita de fraude.</p>
+      <p><a href="mailto:rafael@infosaas.co?subject=Security">rafael@infosaas.co</a> (assunto: "Security")</p>
+      <p style="color:#94a3b8;font-size:13px">Prioridade máxima. Damos retorno em até 24h.</p>
+    </div>
+
+    <h2>Empresa</h2>
+    <p>
+      <strong>Propps Media Ltda</strong><br>
+      CNPJ: 35.735.278/0001-91<br>
+      Marca: <strong>Askine</strong>
+    </p>
+  `;
+}
+
+function aboutHtml(): string {
+  return `
+    <h2>O que fazemos</h2>
+    <p>Transformamos cursos em vídeo em <strong>tutores agênticos</strong>. O aluno conversa com Claude.ai ou ChatGPT sobre o conteúdo do curso, e a IA responde com base nas aulas reais — citando o trecho exato e mostrando o vídeo no minuto certo.</p>
+
+    <h2>Para quem</h2>
+    <p>Infoprodutores brasileiros que vendem cursos pelo Hotmart, hospedam vídeos no Panda Video e querem entregar uma experiência educacional ativa em vez de "vídeo + PDF".</p>
+
+    <h2>Como funciona em uma frase</h2>
+    <p>O infoprodutor configura o curso uma vez. A gente transcreve via Whisper, indexa com embeddings vetoriais (pgvector), expõe via Model Context Protocol. O aluno adiciona um conector no Claude.ai ou ChatGPT, autentica com o email da compra, e ganha acesso a um tutor 24/7 ancorado no conteúdo daquele curso específico.</p>
+
+    <h2>Decisões deliberadas</h2>
+    <ul>
+      <li><strong>MCP global, não por infoprodutor.</strong> Um aluno que compra de vários infoprodutores adiciona um conector só</li>
+      <li><strong>Whisper como única fonte de transcrição.</strong> Qualidade consistente; cobrança previsível</li>
+      <li><strong>Sem período de carência.</strong> Assinatura vence no dia, sem 7d de tolerância — modelo claro</li>
+      <li><strong>OAuth 2.1 + magic link.</strong> Sem senha; sem conta separada; quem comprou no Hotmart entra</li>
+      <li><strong>Multi-tenant desde o dia 1.</strong> Cada infoprodutor é isolado; mesmo schema, hardening via filtros</li>
+    </ul>
+
+    <h2>Stack</h2>
+    <ul>
+      <li>TypeScript + Node 24 (sem build step — tsx direto)</li>
+      <li>Supabase Postgres 17 + pgvector HNSW + pg_cron + Storage</li>
+      <li>PostgREST como camada runtime de DB</li>
+      <li>OpenAI Whisper + text-embedding-3-small</li>
+      <li>Resend (transactional), ValidaPay (billing), Hotmart (webhooks de venda)</li>
+      <li>EasyPanel auto-deploy a partir do GitHub</li>
+    </ul>
+
+    <h2>Quem mantém</h2>
+    <p><a href="https://www.linkedin.com/in/rafaelalmeidasouza" style="color:#3b82f6" rel="nofollow">Rafael Almeida Souza</a>, fundador da <strong>Propps Media</strong> (CNPJ 35.735.278/0001-91). Brasileiro, engenheiro solo, técnico em todas as camadas.</p>
+
+    <h2>Onde estamos</h2>
+    <ul>
+      <li><a href="/pricing" style="color:#3b82f6">Pricing</a></li>
+      <li><a href="/docs" style="color:#3b82f6">Documentação</a></li>
+      <li><a href="/status" style="color:#3b82f6">Status</a></li>
+      <li><a href="/contact" style="color:#3b82f6">Contato</a></li>
+    </ul>
+  `;
 }
 
 // ---------- Enterprise lead capture (Phase 5.6.d) ----------------------
@@ -459,7 +922,7 @@ ${NAV}
     <textarea name="message" rows="4" placeholder="Quantos cursos, qual plataforma de vídeo, integrações desejadas..."></textarea>
     <div style="margin-top:20px"><button type="submit">Enviar</button></div>
   </form>
-</main>`;
+</main>${FOOTER}`;
 }
 
 // ---------- Docs page (Phase 5.6.c) -----------------------------------
@@ -622,7 +1085,7 @@ ${NAV}
     </ul>
   </section>
 
-</main>`;
+</main>${FOOTER}`;
 }
 
 // ---------- Status page (Phase 5.6.a) ---------------------------------
@@ -756,5 +1219,5 @@ ${NAV}
     Atualizado: ${new Date().toLocaleString("pt-BR")} ·
     <a href="/status.json" style="color:#3b82f6">JSON</a>
   </p>
-</main>`;
+</main>${FOOTER}`;
 }
