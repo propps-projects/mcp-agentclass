@@ -54,6 +54,8 @@ async function main() {
   const trialEndsAt = args.status === "trial"
     ? new Date(Date.now() + 14 * 24 * 3600 * 1000)
     : null;
+  const { encryptSecret } = await import("../../src/lib/crypto.ts");
+  const encryptedPandaKey = args.pandaKey ? encryptSecret(args.pandaKey) : null;
   const rows = await s<{ id: string; slug: string }[]>`
     INSERT INTO tenants (slug, name, contact_email, plan_id, status, panda_api_key_enc, trial_ends_at)
     VALUES (
@@ -62,7 +64,7 @@ async function main() {
       ${args.email},
       ${args.plan},
       ${args.status},
-      ${args.pandaKey ?? null},
+      ${encryptedPandaKey},
       ${trialEndsAt}
     )
     RETURNING id, slug

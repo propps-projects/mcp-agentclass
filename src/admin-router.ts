@@ -233,7 +233,10 @@ async function integrationsHotmartPost(tenant: Tenant, req: IncomingMessage, res
     if (!hottok || hottok.length < 16) {
       return redirect(res, `${adminBase(tenant)}/integrations?msg=hottok_too_short`);
     }
-    await sb.update("tenants", `id=eq.${tenant.id}`, { hotmart_basic_token_enc: hottok });
+    const { encryptSecret } = await import("./lib/crypto.ts");
+    await sb.update("tenants", `id=eq.${tenant.id}`, {
+      hotmart_basic_token_enc: encryptSecret(hottok),
+    });
     return redirect(res, `${adminBase(tenant)}/integrations?msg=hottok_saved`);
   }
 
@@ -280,7 +283,10 @@ async function integrationsPandaPost(tenant: Tenant, req: IncomingMessage, res: 
   if (!key || key.length < 8) {
     return redirect(res, `${adminBase(tenant)}/integrations?msg=panda_key_too_short`);
   }
-  await sb.update("tenants", `id=eq.${tenant.id}`, { panda_api_key_enc: key });
+  const { encryptSecret } = await import("./lib/crypto.ts");
+  await sb.update("tenants", `id=eq.${tenant.id}`, {
+    panda_api_key_enc: encryptSecret(key),
+  });
   redirect(res, `${adminBase(tenant)}/integrations?msg=panda_saved`);
 }
 

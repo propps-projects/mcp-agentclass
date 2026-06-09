@@ -65,10 +65,11 @@ async function main() {
   const tenantId = tenants[0].id;
 
   if (args.setHottok !== undefined) {
+    const { encryptSecret } = await import("../../src/lib/crypto.ts");
     await sb.update("tenants", `id=eq.${tenantId}`, {
-      hotmart_basic_token_enc: args.setHottok,
+      hotmart_basic_token_enc: encryptSecret(args.setHottok),
     });
-    console.log(`✓ Set Hottok for tenant ${args.tenantSlug}`);
+    console.log(`✓ Set Hottok for tenant ${args.tenantSlug} (encrypted)`);
   }
 
   if (args.courseSlug && args.productId) {

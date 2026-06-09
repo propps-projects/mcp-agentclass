@@ -194,12 +194,15 @@ interface TenantTokenRow {
 }
 
 /** Reads the tenant's Hotmart Hottok (the webhook secret) for HMAC/Hottok
- *  validation. We store it in hotmart_basic_token_enc (cleartext for now;
- *  envelope encryption is a Phase 5 hardening task). */
+ *  validation. Stored as AES-256-GCM envelope (Phase 5.5) via the
+ *  enc:v1: prefix; legacy cleartext values are returned untouched until
+ *  the one-shot migration script re-encrypts them. */
 export async function getHotmartHottok(tenantId: string): Promise<string | null> {
   const row = await sb.selectOne<TenantTokenRow>(
     "tenants",
     `id=eq.${tenantId}&select=hotmart_basic_token_enc`,
   );
-  return row?.hotmart_basic_token_enc ?? null;
+  if (!row?.hotmart_basic_token_enc) return null;
+  const { decryptSecret } = await import("./crypto.ts");
+  return decryptSecret(row.hotmart_basic_token_enc);
 }

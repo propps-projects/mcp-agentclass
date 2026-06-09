@@ -49,15 +49,14 @@ export async function resolveTenantBySlug(slug: string): Promise<Tenant | null> 
   );
   if (!row) return null;
 
+  const { decryptSecret } = await import("./crypto.ts");
   const tenant: Tenant = {
     id: row.id,
     slug: row.slug,
     name: row.name,
     status: row.status as Tenant["status"],
     planId: row.plan_id,
-    // TODO Phase 1+: decrypt panda_api_key_enc here using app key.
-    // For now we pass through (no encryption layer yet).
-    pandaApiKey: row.panda_api_key_enc ?? undefined,
+    pandaApiKey: decryptSecret(row.panda_api_key_enc) ?? undefined,
   };
   cache.set(slug, { tenant, expires: Date.now() + CACHE_TTL_MS });
   return tenant;

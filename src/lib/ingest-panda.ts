@@ -73,6 +73,9 @@ export async function startPandaIngest(
   if (!tenant?.panda_api_key_enc) {
     return { ok: false, reason: "missing_panda_key" };
   }
+  const { decryptSecret } = await import("./crypto.ts");
+  const pandaKey = decryptSecret(tenant.panda_api_key_enc);
+  if (!pandaKey) return { ok: false, reason: "missing_panda_key" };
 
   const course = await sb.selectOne<CourseToIngest>(
     "courses",
@@ -86,7 +89,7 @@ export async function startPandaIngest(
   if (!folderId) return { ok: false, reason: "missing_folder_id" };
 
   // Verify Panda is reachable + count videos before reporting OK
-  const panda = new PandaClient(tenant.panda_api_key_enc);
+  const panda = new PandaClient(pandaKey);
   const videos = await panda.listFolderVideos(folderId);
   if (!videos.length) return { ok: false, reason: "no_videos" };
 
