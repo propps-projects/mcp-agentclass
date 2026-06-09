@@ -306,19 +306,48 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
-    // ---------- Canonical RFC 8414/9728 well-known discovery ----------
+    // ---------- Canonical RFC 8414/9728 well-known discovery (deprecated) ----------
+    // Phase 5.3: redirect the tenant-scoped canonical URLs to global root.
     if (route.kind === "discovery") {
-      const tenant = await resolveTenantBySlug(route.tenantSlug);
-      if (!tenant) { res.writeHead(404).end("tenant not found"); return; }
-      if (!isMcpAccessible(tenant)) { res.writeHead(404).end("tenant unavailable"); return; }
-      const oauthMatch = matchOAuthRoute(route.suffix, req.method ?? "GET");
-      if (!oauthMatch) { res.writeHead(404).end("not found"); return; }
-      await handleOAuthRoute(oauthMatch, tenant, req, res);
+      res.writeHead(301, { Location: route.suffix }).end();
       return;
     }
 
     // ---------- Tenant routes (OAuth + admin dashboard + MCP) ----------
     if (route.kind === "tenant") {
+      // Phase 5.3: deprecate per-tenant MCP + OAuth URLs. Admin dashboard
+      // stays tenant-scoped (each infoprodutor manages their own). MCP and
+      // OAuth redirect to global with 301 so existing connectors migrate
+      // on the next request.
+      if (
+        route.suffix === "/mcp" ||
+        route.suffix === "/mcp-gpt"
+      ) {
+        const target = route.suffix; // identical path at root
+        res.writeHead(301, { Location: target }).end();
+        return;
+      }
+      // Tenant-scoped OAuth → global OAuth
+      if (
+        route.suffix === "/.well-known/oauth-authorization-server" ||
+        route.suffix === "/.well-known/oauth-protected-resource"
+      ) {
+        res.writeHead(301, { Location: route.suffix }).end();
+        return;
+      }
+      if (
+        route.suffix === "/oauth/register" ||
+        route.suffix === "/oauth/authorize" ||
+        route.suffix === "/oauth/token" ||
+        route.suffix === "/oauth/revoke" ||
+        route.suffix === "/auth/verify"
+      ) {
+        // Forward query string so /authorize?client_id=... still works
+        const qs = req.url?.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+        res.writeHead(301, { Location: `${route.suffix}${qs}` }).end();
+        return;
+      }
+
       const tenant = await resolveTenantBySlug(route.tenantSlug);
       if (!tenant) { res.writeHead(404).end("tenant not found"); return; }
 
