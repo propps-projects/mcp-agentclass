@@ -1333,6 +1333,7 @@ async function planPage(tenant: Tenant, req: IncomingMessage, res: ServerRespons
   if (!admin) return;
 
   const { getPlan, listPlans, getUsage } = await import("./lib/plans.ts");
+  const { getMonthlyPricesByPlanId } = await import("./lib/plan-prices.ts");
   const [current, allPlans] = await Promise.all([
     getPlan(tenant.planId),
     listPlans({ publicOnly: true }),
@@ -1351,6 +1352,7 @@ async function planPage(tenant: Tenant, req: IncomingMessage, res: ServerRespons
     }));
   }
   const usage = await getUsage(tenant.id, current, tenant.status);
+  const priceMap = await getMonthlyPricesByPlanId(allPlans.map((p) => p.id));
 
   html(res, 200, await layoutHtml({
     title: "Plano e Uso",
@@ -1361,7 +1363,7 @@ async function planPage(tenant: Tenant, req: IncomingMessage, res: ServerRespons
     tenantStatus: tenant.status,
     activeNav: "plan",
     admin,
-    body: planPageHtml({ tenant, current, allPlans, usage }),
+    body: planPageHtml({ tenant, current, allPlans, usage, priceMap }),
   }));
 }
 
@@ -2059,6 +2061,7 @@ function planPageHtml(args: {
   current: import("./lib/plans.ts").Plan;
   allPlans: import("./lib/plans.ts").Plan[];
   usage: import("./lib/plans.ts").Usage;
+  priceMap: Map<string, import("./lib/plan-prices.ts").PlanPrice>;
 }): string {
   const fmtBytes = (n: number) => {
     if (n < 1024) return `${n} B`;
@@ -2092,7 +2095,7 @@ function planPageHtml(args: {
 <div class="card">
   <h3>Plano atual</h3>
   <p style="font-size:24px;margin:8px 0"><strong>${esc(args.current.name)}</strong></p>
-  <p>${esc(fmtPriceBrl(args.current.monthlyPriceBrl))}/mês</p>
+  <p>${esc(fmtPriceBrl(args.priceMap.get(args.current.id)?.amountBrl ?? null))}/mês</p>
 </div>
 
 <h2>Uso este mês</h2>
@@ -2108,7 +2111,7 @@ function planPageHtml(args: {
   ${args.allPlans.map((p) => `
     <div class="card" style="${p.id === args.current.id ? "border:2px solid #111;" : ""}margin:0">
       <h3 style="margin-top:0">${esc(p.name)}${p.id === args.current.id ? " <span style=\"font-size:11px;color:#666;font-weight:400\">(atual)</span>" : ""}</h3>
-      <p style="font-size:20px;margin:8px 0"><strong>${esc(fmtPriceBrl(p.monthlyPriceBrl))}</strong>${p.monthlyPriceBrl != null ? "<span style=\"font-size:12px;color:#999\">/mês</span>" : ""}</p>
+      <p style="font-size:20px;margin:8px 0"><strong>${esc(fmtPriceBrl(args.priceMap.get(p.id)?.amountBrl ?? null))}</strong>${args.priceMap.get(p.id)?.amountBrl != null ? "<span style=\"font-size:12px;color:#999\">/mês</span>" : ""}</p>
       <ul class="help" style="padding-left:18px;margin-top:12px">
         <li>${esc(limitLabel(p.maxCourses, "cursos"))}</li>
         <li>${esc(limitLabel(p.transcribeHoursMonth, "h transcrição/mês"))}</li>

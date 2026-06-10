@@ -134,11 +134,14 @@ async function dashboard(req: IncomingMessage, res: ServerResponse): Promise<voi
     `select=id,slug,name,plan_id,status,subscription_active_until,created_at&order=created_at.desc`,
   );
 
-  // MRR estimate: sum monthly_price_brl of active tenants per plan_id
-  const planRows = await sb.select<{ id: string; monthly_price_brl: number | null }>(
-    "plans", "select=id,monthly_price_brl",
-  );
-  const priceById = new Map(planRows.map((p) => [p.id, Number(p.monthly_price_brl ?? 0)]));
+  // MRR estimate: sum MONTHLY plan_prices of active tenants per plan_id.
+  // For non-MONTHLY subscriptions we'd amortize, but until tenants can
+  // pick a recurrence everyone is MONTHLY anyway.
+  const planRows = await sb.select<{ id: string }>("plans", "select=id");
+  const { getMonthlyPricesByPlanId } = await import("./lib/plan-prices.ts");
+  const priceMap = await getMonthlyPricesByPlanId(planRows.map((p) => p.id));
+  const priceById = new Map<string, number>();
+  for (const p of planRows) priceById.set(p.id, priceMap.get(p.id)?.amountBrl ?? 0);
   const mrr = tenants
     .filter((t) => t.status === "active")
     .reduce((sum, t) => sum + (priceById.get(t.plan_id) ?? 0), 0);
@@ -223,17 +226,20 @@ async function plansList(req: IncomingMessage, res: ServerResponse): Promise<voi
 interface PlanRowFull {
   id: string;
   name: string;
-  monthly_price_brl: string | number | null;
   max_courses: number | null;
   transcribe_hours_month: string | number | null;
   active_students_month: number | null;
   kb_size_bytes: string | number | null;
   is_public: boolean;
   display_order: number;
-  validapay_product_id: string | null;
-  validapay_price_id: string | null;
 }
 
+/**
+ * Sync ValidaPay for the MONTHLY plan_price. (Migration 014: monthly
+ * lives in plan_prices, no longer on the plans row.) Non-monthly
+ * recurrence sync goes through /plans/:id/prices/sync-validapay
+ * (stub until ValidaPay's recurrence API ships).
+ */
 async function planSyncToValidapay(id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const sess = await requireSuperAdmin(req, res);
   if (!sess) return;
@@ -242,8 +248,10 @@ async function planSyncToValidapay(id: string, req: IncomingMessage, res: Server
     `id=eq.${encodeURIComponent(id)}&select=*`,
   );
   if (!plan) return redirect(res, `${publicUrl()}/super-admin/plans?msg=plan_not_found`);
-  if (plan.monthly_price_brl == null) {
-    return redirect(res, `${publicUrl()}/super-admin/plans?msg=sync_needs_price`);
+  const { getPlanMonthlyPrice, updatePlanPriceValidapay, upsertPlanPrice } = await import("./lib/plan-prices.ts");
+  const monthly = await getPlanMonthlyPrice(id);
+  if (!monthly) {
+    return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(id)}&msg=sync_needs_price`);
   }
   try {
     const { createProductWithMonthlyPrice } = await import("./lib/validapay.ts");
@@ -251,18 +259,19 @@ async function planSyncToValidapay(id: string, req: IncomingMessage, res: Server
       name: plan.name,
       description: `Askine ${plan.name}`,
       statementDescriptor: `ASKINE ${plan.id.toUpperCase()}`.slice(0, 22),
-      amountBrl: Number(plan.monthly_price_brl),
+      amountBrl: monthly.amountBrl,
       externalId: plan.id,
     });
     const priceId = product.prices[0]?.priceId ?? null;
-    await sb.update("plans", `id=eq.${encodeURIComponent(id)}`, {
-      validapay_product_id: product.productId,
-      validapay_price_id: priceId,
+    await updatePlanPriceValidapay({
+      planId: id, recurrence: "MONTHLY",
+      validapayProductId: product.productId,
+      validapayPriceId: priceId,
     });
-    redirect(res, `${publicUrl()}/super-admin/plans?msg=sync_ok`);
+    redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(id)}&msg=sync_ok`);
   } catch (err) {
     console.error("ValidaPay sync failed:", err);
-    redirect(res, `${publicUrl()}/super-admin/plans?msg=sync_failed`);
+    redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(id)}&msg=sync_failed`);
   }
 }
 
@@ -273,9 +282,10 @@ async function planUpdate(id: string, req: IncomingMessage, res: ServerResponse)
   const num = (s: string | null) => s == null || s === "" ? null : Number(s);
   const big = (s: string | null) => s == null || s === "" ? null : Number(s);
 
+  // Capacity-only update. Pricing is managed in the periods table via
+  // /plans/:id/prices (Phase 8.4 plan_prices canonical).
   const patch: Record<string, unknown> = {
     name: form.get("name") ?? undefined,
-    monthly_price_brl: num(form.get("monthly_price_brl")),
     max_courses: num(form.get("max_courses")),
     transcribe_hours_month: num(form.get("transcribe_hours_month")),
     active_students_month: num(form.get("active_students_month")),
@@ -284,11 +294,10 @@ async function planUpdate(id: string, req: IncomingMessage, res: ServerResponse)
     display_order: num(form.get("display_order")) ?? 0,
     updated_at: new Date().toISOString(),
   };
-  // Strip undefined
   for (const k of Object.keys(patch)) if (patch[k] === undefined) delete patch[k];
 
   await sb.update("plans", `id=eq.${encodeURIComponent(id)}`, patch);
-  redirect(res, `${publicUrl()}/super-admin/plans?msg=plan_saved`);
+  redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(id)}&msg=plan_saved`);
 }
 
 // ----- Add-ons (Phase 8.3) -------------------------------------------------
@@ -421,11 +430,44 @@ async function planPriceDeleteH(planId: string, req: IncomingMessage, res: Serve
   redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_deleted`);
 }
 
-async function planPriceSyncToValidapay(planId: string, _req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // Currently a no-op stub: the ValidaPay API for non-monthly recurrence
-  // hasn't shipped. We return a friendly redirect so the UI banner
-  // explains what's missing. Wire the actual sync when the docs land.
-  return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_unavailable`);
+async function planPriceSyncToValidapay(planId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const recurrence = (form.get("recurrence") ?? "MONTHLY") as import("./lib/plan-prices.ts").Recurrence;
+  // MONTHLY uses the existing createProductWithMonthlyPrice flow.
+  // Non-monthly is a stub until ValidaPay's recurrence API ships.
+  if (recurrence !== "MONTHLY") {
+    return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_unavailable`);
+  }
+  const plan = await sb.selectOne<{ id: string; name: string }>("plans",
+    `id=eq.${encodeURIComponent(planId)}&select=id,name`);
+  if (!plan) return redirect(res, `${publicUrl()}/super-admin/plans?msg=plan_not_found`);
+  const { getPlanMonthlyPrice, updatePlanPriceValidapay } = await import("./lib/plan-prices.ts");
+  const monthly = await getPlanMonthlyPrice(planId);
+  if (!monthly) {
+    return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_needs_price`);
+  }
+  try {
+    const { createProductWithMonthlyPrice } = await import("./lib/validapay.ts");
+    const product = await createProductWithMonthlyPrice({
+      name: plan.name,
+      description: `Askine ${plan.name}`,
+      statementDescriptor: `ASKINE ${planId.toUpperCase()}`.slice(0, 22),
+      amountBrl: monthly.amountBrl,
+      externalId: planId,
+    });
+    const priceId = product.prices[0]?.priceId ?? null;
+    await updatePlanPriceValidapay({
+      planId, recurrence: "MONTHLY",
+      validapayProductId: product.productId,
+      validapayPriceId: priceId,
+    });
+    redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_ok`);
+  } catch (err) {
+    console.error("ValidaPay sync (monthly) failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_failed`);
+  }
 }
 
 function addonTabHtml(a: import("./lib/addons.ts").Addon, args: { isActive: boolean }): string {
@@ -770,36 +812,43 @@ function fmtBrl(n: number): string {
 function planPricesSectionHtml(
   planId: string,
   prices: Array<import("./lib/plan-prices.ts").PlanPrice>,
-  monthlyPrice: number | null,
 ): string {
-  // Recurrences we offer beyond MONTHLY (which lives in plans.monthly_price_brl)
-  const alts: Array<{ key: "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL"; label: string; months: number }> = [
+  // All recurrences as first-class options. The customer at signup
+  // picks one of those that have an amount + ValidaPay sync. MONTHLY
+  // syncs through the existing createProductWithMonthlyPrice path;
+  // the others stub until ValidaPay ships the recurrence API.
+  const periods: Array<{ key: "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL"; label: string; months: number }> = [
+    { key: "MONTHLY",     label: "Mensal",     months: 1 },
     { key: "QUARTERLY",   label: "Trimestral", months: 3 },
     { key: "SEMI_ANNUAL", label: "Semestral",  months: 6 },
     { key: "ANNUAL",      label: "Anual",      months: 12 },
   ];
   const byKey = new Map(prices.map((p) => [p.recurrence, p]));
+  const monthly = byKey.get("MONTHLY");
   const fmt = (n: number) => `R$ ${n.toFixed(2).replace(".", ",")}`;
-  const monthlyHint = (months: number): string => {
-    if (monthlyPrice == null) return "";
-    const fullPrice = monthlyPrice * months;
-    return `<span style="color:var(--ax-text-mute);font-size:11.5px;margin-left:6px">≈ ${fmt(fullPrice)} sem desconto (${fmt(monthlyPrice)} × ${months})</span>`;
+  const hint = (months: number): string => {
+    if (months === 1 || monthly == null) return "";
+    const fullPrice = monthly.amountBrl * months;
+    return `<span style="color:var(--ax-text-mute);font-size:11.5px;margin-left:6px">≈ ${fmt(fullPrice)} sem desconto (${fmt(monthly.amountBrl)} × ${months})</span>`;
   };
 
   return `
-<h3 style="margin-top:28px;font-size:13px;color:var(--ax-text-mute);text-transform:uppercase;letter-spacing:0.05em">Periodicidades adicionais</h3>
-<p class="help" style="margin:6px 0 14px">Defina preços com desconto para 3 / 6 / 12 meses. Sync ValidaPay desses preços fica disponível quando a doc do ValidaPay publicar a rota de recurrence (aviso na UI). Mensal continua em "Preço BRL/mês" acima.</p>
+<h3 style="margin-top:28px;font-size:13px;color:var(--ax-text-mute);text-transform:uppercase;letter-spacing:0.05em">Períodos de cobrança</h3>
+<p class="help" style="margin:6px 0 14px">Defina preço e sincronize com ValidaPay para cada período em que o plano é oferecido. Mensal sincroniza agora; Trimestral/Semestral/Anual aguardam o ValidaPay publicar a rota de recurrence.</p>
 <table class="ax-table" style="font-size:13px">
-  <tr><th style="width:120px">Recurrência</th><th style="width:200px">Preço total</th><th>Status ValidaPay</th><th style="width:200px;text-align:right">Ações</th></tr>
-  ${alts.map((alt) => {
-    const cur = byKey.get(alt.key);
+  <tr><th style="width:140px">Período</th><th style="width:240px">Preço total</th><th>Status ValidaPay</th><th style="width:220px;text-align:right">Ações</th></tr>
+  ${periods.map((per) => {
+    const cur = byKey.get(per.key);
     const synced = !!cur?.validapayPriceId;
+    const syncDisabledAttrs = per.key === "MONTHLY"
+      ? ""
+      : ` disabled title="Aguardando ValidaPay liberar API de recurrence não-mensal"`;
     return `<tr>
-      <td><strong>${alt.label}</strong>${monthlyHint(alt.months)}</td>
+      <td><strong>${per.label}</strong>${hint(per.months)}</td>
       <td>
         <form method="POST" action="/super-admin/plans/${esc(planId)}/prices" style="display:flex;gap:6px">
-          <input type="hidden" name="recurrence" value="${alt.key}">
-          <input name="amount_brl" type="number" step="0.01" value="${cur?.amountBrl ?? ""}" placeholder="0.00" style="width:120px">
+          <input type="hidden" name="recurrence" value="${per.key}">
+          <input name="amount_brl" type="number" step="0.01" value="${cur?.amountBrl ?? ""}" placeholder="0.00" style="width:140px">
           <button type="submit" class="ax-btn sm">${cur ? "Salvar" : "Definir"}</button>
         </form>
       </td>
@@ -807,17 +856,19 @@ function planPricesSectionHtml(
         cur == null
           ? `<span style="color:var(--ax-text-mute)">—</span>`
           : synced
-            ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">● sync</span>`
-            : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ aguardando API</span>`
+            ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">● ${esc(cur.validapayPriceId ?? "sync")}</span>`
+            : per.key === "MONTHLY"
+              ? `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ não sincronizado</span>`
+              : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ aguardando API</span>`
       }</td>
       <td style="text-align:right">
         ${cur ? `
           <form method="POST" action="/super-admin/plans/${esc(planId)}/prices/sync-validapay" style="display:inline">
-            <input type="hidden" name="recurrence" value="${alt.key}">
-            <button type="submit" class="ax-btn ghost sm" disabled title="Aguardando ValidaPay liberar API de recurrence não-mensal">${synced ? "Re-sync" : "Sync"}</button>
+            <input type="hidden" name="recurrence" value="${per.key}">
+            <button type="submit" class="ax-btn ghost sm"${syncDisabledAttrs}>${synced ? "Re-sync" : "Sync"}</button>
           </form>
-          <form method="POST" action="/super-admin/plans/${esc(planId)}/prices/delete" style="display:inline" onsubmit="return confirm('Remover esta periodicidade?')">
-            <input type="hidden" name="recurrence" value="${alt.key}">
+          <form method="POST" action="/super-admin/plans/${esc(planId)}/prices/delete" style="display:inline" onsubmit="return confirm('Remover este período?')">
+            <input type="hidden" name="recurrence" value="${per.key}">
             <button type="submit" class="ax-btn ghost sm" style="color:var(--ax-danger)">Remover</button>
           </form>` : ""}
       </td>
@@ -827,26 +878,31 @@ function planPricesSectionHtml(
 }
 
 function planTabHtml(p: PlanRowFull, args: { isActive: boolean; prices: Array<import("./lib/plan-prices.ts").PlanPrice> }): string {
+  const monthly = args.prices.find((pp) => pp.recurrence === "MONTHLY");
+  const monthlyAmount = monthly?.amountBrl ?? null;
   const m = calcMargin({
-    priceBrl: p.monthly_price_brl != null ? Number(p.monthly_price_brl) : null,
+    priceBrl: monthlyAmount,
     hoursMonth: p.transcribe_hours_month != null ? Number(p.transcribe_hours_month) : null,
     kbBytes: p.kb_size_bytes != null ? Number(p.kb_size_bytes) : null,
   });
   const marginColor = m.marginPct >= 50 ? "var(--ax-success)" : m.marginPct >= 25 ? "var(--ax-warn)" : "var(--ax-danger)";
+  const hasAnyPrice = args.prices.length > 0;
   return `
 <div class="ax-card" style="display:${args.isActive ? "block" : "none"}" data-plan-panel="${esc(p.id)}">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
     <h2 style="margin:0">${esc(p.name)}</h2>
     <code style="font-size:12px;color:var(--ax-text-mute)">${esc(p.id)}</code>
-    ${p.validapay_price_id
-      ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">● ValidaPay sync</span>`
-      : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ não sincronizado</span>`}
+    ${monthly?.validapayPriceId
+      ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">● Mensal sync</span>`
+      : monthly
+        ? `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ Mensal não sincronizado</span>`
+        : !hasAnyPrice
+          ? `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ sem preço</span>`
+          : `<span class="ax-badge" style="background:var(--ax-surface-2);color:var(--ax-text-soft)">apenas períodos longos</span>`}
   </div>
-  ${p.validapay_price_id ? `<p class="help" style="margin:0 0 18px;font-family:ui-monospace,monospace;font-size:12px">price ${esc(p.validapay_price_id)}</p>` : ""}
 
   <form method="POST" action="/super-admin/plans/${esc(p.id)}" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
     <div><label>Nome</label><input name="name" value="${esc(p.name)}"></div>
-    <div><label>Preço BRL/mês</label><input name="monthly_price_brl" type="number" step="0.01" value="${p.monthly_price_brl ?? ""}" placeholder="∞ se vazio"></div>
     <div><label>Max cursos</label><input name="max_courses" type="number" value="${p.max_courses ?? ""}" placeholder="∞"></div>
     <div><label>Transcrição h/mês</label><input name="transcribe_hours_month" type="number" step="0.1" value="${p.transcribe_hours_month ?? ""}" placeholder="∞"></div>
     <div><label>Alunos ativos/mês</label><input name="active_students_month" type="number" value="${p.active_students_month ?? ""}" placeholder="∞"></div>
@@ -854,28 +910,22 @@ function planTabHtml(p: PlanRowFull, args: { isActive: boolean; prices: Array<im
     <div><label>Ordem display</label><input name="display_order" type="number" value="${p.display_order}"></div>
     <div><label>Público?</label><select name="is_public"><option value="true"${p.is_public ? " selected" : ""}>Sim</option><option value="false"${!p.is_public ? " selected" : ""}>Não</option></select></div>
     <div style="grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
-      <button type="submit" class="ax-btn">Salvar ${esc(p.name)}</button>
+      <button type="submit" class="ax-btn">Salvar capacidades</button>
     </div>
   </form>
 
-  <h3 style="margin-top:24px;font-size:13px;color:var(--ax-text-mute);text-transform:uppercase;letter-spacing:0.05em">Margem estimada</h3>
+  ${planPricesSectionHtml(p.id, args.prices)}
+
+  <h3 style="margin-top:28px;font-size:13px;color:var(--ax-text-mute);text-transform:uppercase;letter-spacing:0.05em">Margem estimada (base mensal)</h3>
   <table class="ax-table" style="font-size:13px;margin-top:8px">
     <tr><th style="width:60%">Item</th><th style="text-align:right">Valor</th></tr>
     <tr><td>Whisper (${p.transcribe_hours_month ?? "∞"} h × ${fmtBrl(COST_WHISPER_BRL_PER_HOUR)})</td><td style="text-align:right">- ${fmtBrl(m.whisperCost)}</td></tr>
     <tr><td>Storage Supabase (${((Number(p.kb_size_bytes ?? 0)) / 1024 / 1024).toFixed(0)} MB × ${fmtBrl(COST_STORAGE_BRL_PER_GB)}/GB)</td><td style="text-align:right">- ${fmtBrl(m.storageCost)}</td></tr>
     <tr><td>NF Simples Nacional (${(NF_PERCENT * 100).toFixed(0)}% × preço)</td><td style="text-align:right">- ${fmtBrl(m.nfCost)}</td></tr>
     <tr style="background:var(--ax-surface-2)"><td><strong>Custo total</strong></td><td style="text-align:right"><strong>- ${fmtBrl(m.totalCost)}</strong></td></tr>
-    <tr><td><strong>Preço</strong></td><td style="text-align:right"><strong>+ ${fmtBrl(Number(p.monthly_price_brl ?? 0))}</strong></td></tr>
-    <tr style="background:var(--ax-surface-2)"><td><strong>Margem líquida</strong></td><td style="text-align:right;color:${marginColor}"><strong>${fmtBrl(m.margin)} (${m.marginPct.toFixed(1)}%)</strong></td></tr>
+    <tr><td><strong>Preço mensal</strong></td><td style="text-align:right"><strong>+ ${fmtBrl(Number(monthlyAmount ?? 0))}</strong></td></tr>
+    <tr style="background:var(--ax-surface-2)"><td><strong>Margem líquida (mensal)</strong></td><td style="text-align:right;color:${marginColor}"><strong>${fmtBrl(m.margin)} (${m.marginPct.toFixed(1)}%)</strong></td></tr>
   </table>
-
-  <form method="POST" action="/super-admin/plans/${esc(p.id)}/sync-validapay" style="margin-top:14px;text-align:right">
-    <button type="submit" class="ax-btn ghost" ${p.monthly_price_brl == null ? "disabled" : ""}>
-      ${p.validapay_price_id ? "Re-sync" : "Sync"} ValidaPay
-    </button>
-  </form>
-
-  ${planPricesSectionHtml(p.id, args.prices, p.monthly_price_brl != null ? Number(p.monthly_price_brl) : null)}
 </div>`;
 }
 
@@ -900,11 +950,16 @@ function plansHtml(args: {
   const [msgText, msgKind] = args.message ? msgs[args.message] ?? [args.message, "error"] : ["", ""];
   const activeId = args.plans.find((p) => p.id === args.activeTabId) ? args.activeTabId : args.plans[0]?.id ?? "";
 
-  const tabs = args.plans.map((p) => `
+  const tabs = args.plans.map((p) => {
+    const prices = args.pricesByPlan.get(p.id) ?? [];
+    const monthly = prices.find((pp) => pp.recurrence === "MONTHLY");
+    const synced = !!monthly?.validapayPriceId;
+    return `
     <a href="?tab=${esc(p.id)}" class="plan-tab${p.id === activeId ? " active" : ""}">
       ${esc(p.name)}
-      ${p.validapay_price_id ? `<span class="tab-dot" style="background:var(--ax-success)"></span>` : `<span class="tab-dot" style="background:var(--ax-warn)"></span>`}
-    </a>`).join("");
+      ${synced ? `<span class="tab-dot" style="background:var(--ax-success)"></span>` : `<span class="tab-dot" style="background:var(--ax-warn)"></span>`}
+    </a>`;
+  }).join("");
 
   return `
 <style>

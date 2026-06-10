@@ -93,6 +93,31 @@ export async function deletePlanPrice(planId: string, recurrence: Recurrence): P
   );
 }
 
+/**
+ * Lookup the canonical MONTHLY price for a plan. Returns null if no
+ * MONTHLY recurrence is defined. Used by /pricing, /signup, billing
+ * MRR calc.
+ */
+export async function getPlanMonthlyPrice(planId: string): Promise<PlanPrice | null> {
+  const r = await sb.selectOne<PlanPriceRow>(
+    "plan_prices",
+    `plan_id=eq.${encodeURIComponent(planId)}&recurrence=eq.MONTHLY&select=*`,
+  );
+  return r ? map(r) : null;
+}
+
+/** Batch version — one query per recurrence to avoid N+1 in /pricing. */
+export async function getMonthlyPricesByPlanId(planIds: string[]): Promise<Map<string, PlanPrice>> {
+  const out = new Map<string, PlanPrice>();
+  if (planIds.length === 0) return out;
+  const rows = await sb.select<PlanPriceRow>(
+    "plan_prices",
+    `recurrence=eq.MONTHLY&plan_id=in.(${planIds.map((id) => encodeURIComponent(id)).join(",")})&select=*`,
+  );
+  for (const r of rows) out.set(r.plan_id, map(r));
+  return out;
+}
+
 export async function updatePlanPriceValidapay(args: {
   planId: string;
   recurrence: Recurrence;

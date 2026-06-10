@@ -52,29 +52,50 @@ function slugify(s: string): string {
 
 interface PlanPublic {
   id: string; name: string;
-  monthly_price_brl: number | null;
+  monthly_price_brl: number | null;       // hydrated from plan_prices MONTHLY
   max_courses: number | null;
   transcribe_hours_month: number | null;
   active_students_month: number | null;
   kb_size_bytes: number | null;
-  validapay_price_id: string | null;
+  validapay_price_id: string | null;      // hydrated from plan_prices MONTHLY
   display_order: number;
 }
 
-async function pricingPage(_req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const plans = await sb.select<PlanPublic>(
+interface RawPlanRow {
+  id: string; name: string;
+  max_courses: number | null;
+  transcribe_hours_month: number | null;
+  active_students_month: number | null;
+  kb_size_bytes: number | null;
+  display_order: number;
+}
+
+async function loadPublicPlans(): Promise<PlanPublic[]> {
+  const raw = await sb.select<RawPlanRow>(
     "plans",
-    "select=id,name,monthly_price_brl,max_courses,transcribe_hours_month,active_students_month,kb_size_bytes,validapay_price_id,display_order&is_public=is.true&order=display_order.asc",
+    "select=id,name,max_courses,transcribe_hours_month,active_students_month,kb_size_bytes,display_order&is_public=is.true&order=display_order.asc",
   );
+  if (!raw.length) return [];
+  const { getMonthlyPricesByPlanId } = await import("./lib/plan-prices.ts");
+  const priceMap = await getMonthlyPricesByPlanId(raw.map((p) => p.id));
+  return raw.map((p) => {
+    const pp = priceMap.get(p.id);
+    return {
+      ...p,
+      monthly_price_brl: pp?.amountBrl ?? null,
+      validapay_price_id: pp?.validapayPriceId ?? null,
+    };
+  });
+}
+
+async function pricingPage(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const plans = await loadPublicPlans();
   html(res, 200, pricingHtml(plans));
 }
 
 async function signupGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const q = getQuery(req);
-  const plans = await sb.select<PlanPublic>(
-    "plans",
-    "select=id,name,monthly_price_brl,validapay_price_id&is_public=is.true&order=display_order.asc",
-  );
+  const plans = await loadPublicPlans();
   html(res, 200, signupHtml({
     plans,
     selected: q.get("plan") ?? plans[0]?.id ?? "",
@@ -97,13 +118,16 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
     return redirect(res, `/signup?error=bad_document&plan=${encodeURIComponent(planId)}`);
   }
 
-  // Resolve plan + ValidaPay price
-  const plan = await sb.selectOne<PlanPublic>(
-    "plans",
-    `id=eq.${encodeURIComponent(planId)}&select=id,name,monthly_price_brl,validapay_price_id`,
+  // Resolve plan + MONTHLY price from plan_prices (the canonical pricing
+  // source as of migration 014). Signup currently only offers the
+  // MONTHLY recurrence; a recurrence selector lands in a later sub-phase.
+  const plan = await sb.selectOne<{ id: string; name: string }>(
+    "plans", `id=eq.${encodeURIComponent(planId)}&select=id,name`,
   );
   if (!plan) return redirect(res, `/signup?error=bad_plan`);
-  if (!plan.validapay_price_id) {
+  const { getPlanMonthlyPrice } = await import("./lib/plan-prices.ts");
+  const monthly = await getPlanMonthlyPrice(planId);
+  if (!monthly?.validapayPriceId) {
     return redirect(res, `/signup?error=plan_not_synced&plan=${encodeURIComponent(planId)}`);
   }
 
@@ -134,7 +158,7 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
   let checkoutUrl: string;
   try {
     const session = await createCheckoutSession({
-      priceId: plan.validapay_price_id,
+      priceId: monthly.validapayPriceId,
       customer: { email, documentNumber: documentRaw },
       allowedPaymentMethods: ["pix", "creditcard"],
     });

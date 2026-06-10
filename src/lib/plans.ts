@@ -20,7 +20,6 @@ import { sb } from "./db-api.ts";
 export interface Plan {
   id: string;
   name: string;
-  monthlyPriceBrl: number | null;
   maxCourses: number | null;
   transcribeHoursMonth: number | null;
   activeStudentsMonth: number | null;
@@ -33,7 +32,6 @@ export interface Plan {
 interface PlanRow {
   id: string;
   name: string;
-  monthly_price_brl: string | number | null;
   max_courses: number | null;
   transcribe_hours_month: string | number | null;
   active_students_month: number | null;
@@ -47,7 +45,6 @@ function mapPlan(r: PlanRow): Plan {
   return {
     id: r.id,
     name: r.name,
-    monthlyPriceBrl: r.monthly_price_brl == null ? null : Number(r.monthly_price_brl),
     maxCourses: r.max_courses,
     transcribeHoursMonth: r.transcribe_hours_month == null ? null : Number(r.transcribe_hours_month),
     activeStudentsMonth: r.active_students_month,
