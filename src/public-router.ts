@@ -76,8 +76,8 @@ async function loadPublicPlans(): Promise<PlanPublic[]> {
     "select=id,name,max_courses,transcribe_hours_month,active_students_month,kb_size_bytes,display_order&is_public=is.true&order=display_order.asc",
   );
   if (!raw.length) return [];
-  const { getMonthlyPricesByPlanId } = await import("./lib/plan-prices.ts");
-  const priceMap = await getMonthlyPricesByPlanId(raw.map((p) => p.id));
+  const { getActivePricesByPlanId } = await import("./lib/plan-prices.ts");
+  const priceMap = await getActivePricesByPlanId(raw.map((p) => p.id));
   return raw.map((p) => {
     const pp = priceMap.get(p.id);
     return {
@@ -125,8 +125,8 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
     "plans", `id=eq.${encodeURIComponent(planId)}&select=id,name`,
   );
   if (!plan) return redirect(res, `/signup?error=bad_plan`);
-  const { getPlanMonthlyPrice } = await import("./lib/plan-prices.ts");
-  const monthly = await getPlanMonthlyPrice(planId);
+  const { getActivePlanPrice } = await import("./lib/plan-prices.ts");
+  const monthly = await getActivePlanPrice(planId);
   if (!monthly?.validapayPriceId) {
     return redirect(res, `/signup?error=plan_not_synced&plan=${encodeURIComponent(planId)}`);
   }

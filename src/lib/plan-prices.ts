@@ -32,6 +32,7 @@ export interface PlanPrice {
   planId: string;
   recurrence: Recurrence;
   amountBrl: number;
+  isActive: boolean;
   validapayProductId: string | null;
   validapayPriceId: string | null;
 }
@@ -41,6 +42,7 @@ interface PlanPriceRow {
   plan_id: string;
   recurrence: Recurrence;
   amount_brl: string | number;
+  is_active: boolean;
   validapay_product_id: string | null;
   validapay_price_id: string | null;
 }
@@ -51,6 +53,7 @@ function map(r: PlanPriceRow): PlanPrice {
     planId: r.plan_id,
     recurrence: r.recurrence,
     amountBrl: Number(r.amount_brl),
+    isActive: r.is_active,
     validapayProductId: r.validapay_product_id,
     validapayPriceId: r.validapay_price_id,
   };
@@ -94,28 +97,56 @@ export async function deletePlanPrice(planId: string, recurrence: Recurrence): P
 }
 
 /**
- * Lookup the canonical MONTHLY price for a plan. Returns null if no
- * MONTHLY recurrence is defined. Used by /pricing, /signup, billing
- * MRR calc.
+ * Lookup the currently ACTIVE price for a plan. Returns null if no
+ * price is active. Used by /pricing, /signup, billing MRR calc and
+ * everywhere that asks "what does this plan cost right now".
  */
-export async function getPlanMonthlyPrice(planId: string): Promise<PlanPrice | null> {
+export async function getActivePlanPrice(planId: string): Promise<PlanPrice | null> {
   const r = await sb.selectOne<PlanPriceRow>(
     "plan_prices",
-    `plan_id=eq.${encodeURIComponent(planId)}&recurrence=eq.MONTHLY&select=*`,
+    `plan_id=eq.${encodeURIComponent(planId)}&is_active=is.true&select=*`,
   );
   return r ? map(r) : null;
 }
 
-/** Batch version — one query per recurrence to avoid N+1 in /pricing. */
-export async function getMonthlyPricesByPlanId(planIds: string[]): Promise<Map<string, PlanPrice>> {
+/** Batch version of getActivePlanPrice to avoid N+1 in /pricing. */
+export async function getActivePricesByPlanId(planIds: string[]): Promise<Map<string, PlanPrice>> {
   const out = new Map<string, PlanPrice>();
   if (planIds.length === 0) return out;
   const rows = await sb.select<PlanPriceRow>(
     "plan_prices",
-    `recurrence=eq.MONTHLY&plan_id=in.(${planIds.map((id) => encodeURIComponent(id)).join(",")})&select=*`,
+    `is_active=is.true&plan_id=in.(${planIds.map((id) => encodeURIComponent(id)).join(",")})&select=*`,
   );
   for (const r of rows) out.set(r.plan_id, map(r));
   return out;
+}
+
+/** Lookup price by id (used to grandfather tenants on inactive prices). */
+export async function getPlanPriceById(id: string): Promise<PlanPrice | null> {
+  const r = await sb.selectOne<PlanPriceRow>("plan_prices", `id=eq.${id}&select=*`);
+  return r ? map(r) : null;
+}
+
+/**
+ * Active-price switch: marks the given (plan, recurrence) row active and
+ * deactivates whatever was active before. Throws if no row exists at
+ * (plan, recurrence) — caller must upsertPlanPrice first.
+ */
+export async function activatePlanPrice(planId: string, recurrence: Recurrence): Promise<void> {
+  // Two-step: deactivate current, activate target. Partial unique index
+  // would block the second step if we tried to activate before deactivating.
+  await sb.update("plan_prices", `plan_id=eq.${encodeURIComponent(planId)}&is_active=is.true`, {
+    is_active: false, updated_at: new Date().toISOString(),
+  });
+  await sb.update("plan_prices", `plan_id=eq.${encodeURIComponent(planId)}&recurrence=eq.${recurrence}`, {
+    is_active: true, updated_at: new Date().toISOString(),
+  });
+}
+
+export async function deactivatePlanPrice(planId: string, recurrence: Recurrence): Promise<void> {
+  await sb.update("plan_prices", `plan_id=eq.${encodeURIComponent(planId)}&recurrence=eq.${recurrence}`, {
+    is_active: false, updated_at: new Date().toISOString(),
+  });
 }
 
 export async function updatePlanPriceValidapay(args: {

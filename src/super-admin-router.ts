@@ -138,8 +138,8 @@ async function dashboard(req: IncomingMessage, res: ServerResponse): Promise<voi
   // For non-MONTHLY subscriptions we'd amortize, but until tenants can
   // pick a recurrence everyone is MONTHLY anyway.
   const planRows = await sb.select<{ id: string }>("plans", "select=id");
-  const { getMonthlyPricesByPlanId } = await import("./lib/plan-prices.ts");
-  const priceMap = await getMonthlyPricesByPlanId(planRows.map((p) => p.id));
+  const { getActivePricesByPlanId } = await import("./lib/plan-prices.ts");
+  const priceMap = await getActivePricesByPlanId(planRows.map((p) => p.id));
   const priceById = new Map<string, number>();
   for (const p of planRows) priceById.set(p.id, priceMap.get(p.id)?.amountBrl ?? 0);
   const mrr = tenants
@@ -248,8 +248,8 @@ async function planSyncToValidapay(id: string, req: IncomingMessage, res: Server
     `id=eq.${encodeURIComponent(id)}&select=*`,
   );
   if (!plan) return redirect(res, `${publicUrl()}/super-admin/plans?msg=plan_not_found`);
-  const { getPlanMonthlyPrice, updatePlanPriceValidapay, upsertPlanPrice } = await import("./lib/plan-prices.ts");
-  const monthly = await getPlanMonthlyPrice(id);
+  const { getActivePlanPrice, updatePlanPriceValidapay, upsertPlanPrice } = await import("./lib/plan-prices.ts");
+  const monthly = await getActivePlanPrice(id);
   if (!monthly) {
     return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(id)}&msg=sync_needs_price`);
   }
@@ -306,7 +306,12 @@ async function addonsList(req: IncomingMessage, res: ServerResponse): Promise<vo
   const sess = await requireSuperAdmin(req, res);
   if (!sess) return;
   const { listAddons } = await import("./lib/addons.ts");
+  const { listAddonPrices } = await import("./lib/addon-prices.ts");
   const addons = await listAddons();
+  const pricesByAddon = new Map<string, Array<import("./lib/addon-prices.ts").AddonPrice>>();
+  for (const a of addons) {
+    pricesByAddon.set(a.id, await listAddonPrices(a.id));
+  }
   const q = getQuery(req);
   html(res, 200, layout({
     title: "Add-ons",
@@ -314,6 +319,7 @@ async function addonsList(req: IncomingMessage, res: ServerResponse): Promise<vo
     session: sess,
     body: addonsHtml({
       addons,
+      pricesByAddon,
       message: q.get("msg") ?? undefined,
       activeTabId: q.get("tab") ?? (addons[0]?.id ?? "_new"),
     }),
@@ -337,10 +343,14 @@ async function addonCreate(req: IncomingMessage, res: ServerResponse): Promise<v
     return redirect(res, `${publicUrl()}/super-admin/addons?msg=missing_fields`);
   }
   try {
+    // Capacity row in addons + seed MONTHLY price in addon_prices (active by default)
     await sb.insert("addons", {
-      id, name, description, kind, increment_value, monthly_price_brl, display_order, is_public,
+      id, name, description, kind, increment_value, display_order, is_public,
     }, { returning: "minimal" });
-    redirect(res, `${publicUrl()}/super-admin/addons?msg=addon_created`);
+    const { upsertAddonPrice, activateAddonPrice } = await import("./lib/addon-prices.ts");
+    await upsertAddonPrice({ addonId: id, recurrence: "MONTHLY", amountBrl: monthly_price_brl });
+    await activateAddonPrice(id, "MONTHLY");
+    redirect(res, `${publicUrl()}/super-admin/addons?msg=addon_created&tab=${encodeURIComponent(id)}`);
   } catch (err) {
     console.error("Addon create failed:", err);
     redirect(res, `${publicUrl()}/super-admin/addons?msg=create_failed`);
@@ -351,44 +361,140 @@ async function addonUpdate(id: string, req: IncomingMessage, res: ServerResponse
   const sess = await requireSuperAdmin(req, res);
   if (!sess) return;
   const form = await readForm(req);
+  // Capacity-only update. Price changes happen via /addons/:id/prices.
   const patch: Record<string, unknown> = {
     name: form.get("name") ?? undefined,
     description: form.get("description") ?? null,
     increment_value: form.get("increment_value") ? Number(form.get("increment_value")) : undefined,
-    monthly_price_brl: form.get("monthly_price_brl") ? Number(form.get("monthly_price_brl")) : undefined,
     display_order: form.get("display_order") ? Number(form.get("display_order")) : undefined,
     is_public: form.get("is_public") != null ? (form.get("is_public") === "true") : undefined,
     updated_at: new Date().toISOString(),
   };
   for (const k of Object.keys(patch)) if (patch[k] === undefined) delete patch[k];
   await sb.update("addons", `id=eq.${encodeURIComponent(id)}`, patch);
-  redirect(res, `${publicUrl()}/super-admin/addons?msg=addon_saved`);
+  redirect(res, `${publicUrl()}/super-admin/addons?msg=addon_saved&tab=${encodeURIComponent(id)}`);
 }
 
 async function addonSyncToValidapay(id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const sess = await requireSuperAdmin(req, res);
   if (!sess) return;
-  const { getAddon, updateAddon } = await import("./lib/addons.ts");
+  const { getAddon } = await import("./lib/addons.ts");
+  const { getActiveAddonPrice, updateAddonPriceValidapay } = await import("./lib/addon-prices.ts");
   const addon = await getAddon(id);
   if (!addon) return redirect(res, `${publicUrl()}/super-admin/addons?msg=addon_not_found`);
+  const activePrice = await getActiveAddonPrice(id);
+  if (!activePrice) {
+    return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(id)}&msg=sync_needs_price`);
+  }
+  if (activePrice.recurrence !== "MONTHLY") {
+    // Non-monthly sync stubs out until ValidaPay's recurrence API ships
+    return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(id)}&msg=sync_unavailable`);
+  }
   try {
     const { createProductWithMonthlyPrice } = await import("./lib/validapay.ts");
     const product = await createProductWithMonthlyPrice({
       name: `Askine — ${addon.name}`,
       description: addon.description ?? addon.name,
       statementDescriptor: `ASKINE+${addon.id.toUpperCase()}`.slice(0, 22),
-      amountBrl: addon.monthlyPriceBrl,
+      amountBrl: activePrice.amountBrl,
       externalId: `addon_${addon.id}`,
     });
     const priceId = product.prices[0]?.priceId ?? null;
-    await updateAddon(addon.id, {
-      validapay_product_id: product.productId,
-      validapay_price_id: priceId,
+    await updateAddonPriceValidapay({
+      addonId: id, recurrence: "MONTHLY",
+      validapayProductId: product.productId,
+      validapayPriceId: priceId,
     });
-    redirect(res, `${publicUrl()}/super-admin/addons?msg=sync_ok`);
+    redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(id)}&msg=sync_ok`);
   } catch (err) {
     console.error("Addon ValidaPay sync failed:", err);
-    redirect(res, `${publicUrl()}/super-admin/addons?msg=sync_failed`);
+    redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(id)}&msg=sync_failed`);
+  }
+}
+
+// ----- Addon prices (Phase 8.5) -------------------------------------------
+
+async function addonPriceUpsert(addonId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const recurrence = (form.get("recurrence") ?? "") as import("./lib/plan-prices.ts").Recurrence;
+  const amountBrl = Number(form.get("amount_brl") ?? "");
+  const validRecs = ["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL"];
+  if (!validRecs.includes(recurrence) || !Number.isFinite(amountBrl) || amountBrl <= 0) {
+    return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_invalid`);
+  }
+  try {
+    const { upsertAddonPrice } = await import("./lib/addon-prices.ts");
+    await upsertAddonPrice({ addonId, recurrence, amountBrl });
+    redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_saved`);
+  } catch (err) {
+    console.error("Addon price upsert failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_failed`);
+  }
+}
+
+async function addonPriceDeleteH(addonId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const recurrence = (form.get("recurrence") ?? "") as import("./lib/plan-prices.ts").Recurrence;
+  if (!recurrence) return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_invalid`);
+  const { deleteAddonPrice } = await import("./lib/addon-prices.ts");
+  await deleteAddonPrice(addonId, recurrence);
+  redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_deleted`);
+}
+
+async function addonPriceActivate(addonId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const recurrence = (form.get("recurrence") ?? "") as import("./lib/plan-prices.ts").Recurrence;
+  if (!recurrence) return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_invalid`);
+  try {
+    const { activateAddonPrice } = await import("./lib/addon-prices.ts");
+    await activateAddonPrice(addonId, recurrence);
+    redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_activated`);
+  } catch (err) {
+    console.error("Addon price activate failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_failed`);
+  }
+}
+
+async function addonPriceSyncToValidapay(addonId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const recurrence = (form.get("recurrence") ?? "MONTHLY") as import("./lib/plan-prices.ts").Recurrence;
+  if (recurrence !== "MONTHLY") {
+    return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=sync_unavailable`);
+  }
+  const { getAddon } = await import("./lib/addons.ts");
+  const { listAddonPrices, updateAddonPriceValidapay } = await import("./lib/addon-prices.ts");
+  const addon = await getAddon(addonId);
+  if (!addon) return redirect(res, `${publicUrl()}/super-admin/addons?msg=addon_not_found`);
+  const prices = await listAddonPrices(addonId);
+  const monthly = prices.find((p) => p.recurrence === "MONTHLY");
+  if (!monthly) return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=sync_needs_price`);
+  try {
+    const { createProductWithMonthlyPrice } = await import("./lib/validapay.ts");
+    const product = await createProductWithMonthlyPrice({
+      name: `Askine — ${addon.name}`,
+      description: addon.description ?? addon.name,
+      statementDescriptor: `ASKINE+${addon.id.toUpperCase()}`.slice(0, 22),
+      amountBrl: monthly.amountBrl,
+      externalId: `addon_${addon.id}`,
+    });
+    const priceId = product.prices[0]?.priceId ?? null;
+    await updateAddonPriceValidapay({
+      addonId, recurrence: "MONTHLY",
+      validapayProductId: product.productId,
+      validapayPriceId: priceId,
+    });
+    redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=sync_ok`);
+  } catch (err) {
+    console.error("Addon price sync failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=sync_failed`);
   }
 }
 
@@ -413,6 +519,22 @@ async function planPriceUpsert(planId: string, req: IncomingMessage, res: Server
     redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_saved`);
   } catch (err) {
     console.error("Plan price upsert failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_failed`);
+  }
+}
+
+async function planPriceActivate(planId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const recurrence = (form.get("recurrence") ?? "") as import("./lib/plan-prices.ts").Recurrence;
+  if (!recurrence) return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_invalid`);
+  try {
+    const { activatePlanPrice } = await import("./lib/plan-prices.ts");
+    await activatePlanPrice(planId, recurrence);
+    redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_activated`);
+  } catch (err) {
+    console.error("Plan price activate failed:", err);
     redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_failed`);
   }
 }
@@ -443,8 +565,8 @@ async function planPriceSyncToValidapay(planId: string, req: IncomingMessage, re
   const plan = await sb.selectOne<{ id: string; name: string }>("plans",
     `id=eq.${encodeURIComponent(planId)}&select=id,name`);
   if (!plan) return redirect(res, `${publicUrl()}/super-admin/plans?msg=plan_not_found`);
-  const { getPlanMonthlyPrice, updatePlanPriceValidapay } = await import("./lib/plan-prices.ts");
-  const monthly = await getPlanMonthlyPrice(planId);
+  const { getActivePlanPrice, updatePlanPriceValidapay } = await import("./lib/plan-prices.ts");
+  const monthly = await getActivePlanPrice(planId);
   if (!monthly) {
     return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_needs_price`);
   }
@@ -470,27 +592,30 @@ async function planPriceSyncToValidapay(planId: string, req: IncomingMessage, re
   }
 }
 
-function addonTabHtml(a: import("./lib/addons.ts").Addon, args: { isActive: boolean }): string {
+function addonTabHtml(a: import("./lib/addons.ts").Addon, args: {
+  isActive: boolean;
+  prices: Array<import("./lib/addon-prices.ts").AddonPrice>;
+}): string {
   const kindLabel: Record<string, string> = {
     more_courses: "+ Cursos", more_hours: "+ Horas Whisper",
     more_students: "+ Alunos", more_kb: "+ Storage KB",
   };
+  const activePrice = args.prices.find((p) => p.isActive);
+  const recLabel: Record<string, string> = { MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMI_ANNUAL: "Semestral", ANNUAL: "Anual" };
   return `
 <div class="ax-card" style="display:${args.isActive ? "block" : "none"}" data-addon-panel="${esc(a.id)}">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
     <h2 style="margin:0">${esc(a.name)}</h2>
     <code style="font-size:12px;color:var(--ax-text-mute)">${esc(a.id)}</code>
     <span class="ax-badge" style="background:var(--ax-surface-2);color:var(--ax-text-soft)">${esc(kindLabel[a.kind] ?? a.kind)}</span>
-    ${a.validapayPriceId
-      ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">● ValidaPay sync</span>`
-      : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ não sincronizado</span>`}
+    ${activePrice
+      ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">★ ${esc(recLabel[activePrice.recurrence] ?? activePrice.recurrence)} ativo: R$ ${activePrice.amountBrl.toFixed(2).replace(".", ",")}</span>`
+      : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ sem período ativo</span>`}
   </div>
-  ${a.validapayPriceId ? `<p class="help" style="margin:0 0 18px;font-family:ui-monospace,monospace;font-size:12px">price ${esc(a.validapayPriceId)}</p>` : ""}
 
   <form method="POST" action="/super-admin/addons/${esc(a.id)}" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
     <div><label>Nome</label><input name="name" value="${esc(a.name)}"></div>
     <div><label>Increment</label><input name="increment_value" type="number" step="0.01" value="${a.incrementValue}"></div>
-    <div><label>Preço BRL/mês</label><input name="monthly_price_brl" type="number" step="0.01" value="${a.monthlyPriceBrl}"></div>
     <div><label>Ordem</label><input name="display_order" type="number" value="${a.displayOrder}"></div>
     <div><label>Público?</label>
       <select name="is_public">
@@ -500,15 +625,18 @@ function addonTabHtml(a: import("./lib/addons.ts").Addon, args: { isActive: bool
     </div>
     <div style="grid-column:1/-1"><label>Descrição</label><input name="description" value="${esc(a.description ?? "")}"></div>
     <div style="grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
-      <button type="submit" class="ax-btn">Salvar ${esc(a.name)}</button>
+      <button type="submit" class="ax-btn">Salvar capacidades</button>
     </div>
   </form>
 
-  <form method="POST" action="/super-admin/addons/${esc(a.id)}/sync-validapay" style="margin-top:14px;text-align:right">
-    <button type="submit" class="ax-btn ghost">
-      ${a.validapayPriceId ? "Re-sync" : "Sync"} ValidaPay
-    </button>
-  </form>
+  ${periodsTableHtml({
+    ownerId: a.id,
+    kind: "addons",
+    prices: args.prices.map((p) => ({
+      id: p.id, recurrence: p.recurrence, amountBrl: p.amountBrl,
+      isActive: p.isActive, validapayPriceId: p.validapayPriceId,
+    })),
+  })}
 </div>`;
 }
 
@@ -547,32 +675,44 @@ function addonNewTabHtml(isActive: boolean): string {
 
 function addonsHtml(args: {
   addons: Array<import("./lib/addons.ts").Addon>;
+  pricesByAddon: Map<string, Array<import("./lib/addon-prices.ts").AddonPrice>>;
   message?: string;
   activeTabId: string;
 }): string {
-  const msgs: Record<string, [string, "success" | "error"]> = {
-    addon_created:   ["Add-on criado.", "success"],
-    addon_saved:     ["Add-on atualizado.", "success"],
-    sync_ok:         ["Add-on sincronizado com ValidaPay.", "success"],
-    sync_failed:     ["Falha ao sincronizar. Veja logs.", "error"],
-    addon_not_found: ["Add-on não encontrado.", "error"],
-    missing_fields:  ["Preencha id, nome, kind, valor e preço.", "error"],
-    create_failed:   ["Erro ao criar (talvez id duplicado).", "error"],
+  const msgs: Record<string, [string, "success" | "error" | "warn"]> = {
+    addon_created:    ["Add-on criado.", "success"],
+    addon_saved:      ["Capacidades do add-on salvas.", "success"],
+    sync_ok:          ["Add-on sincronizado com ValidaPay.", "success"],
+    sync_failed:      ["Falha ao sincronizar. Veja logs.", "error"],
+    sync_needs_price: ["Defina o preço primeiro.", "error"],
+    addon_not_found:  ["Add-on não encontrado.", "error"],
+    missing_fields:   ["Preencha id, nome, kind, valor e preço.", "error"],
+    create_failed:    ["Erro ao criar (talvez id duplicado).", "error"],
+    price_saved:      ["Preço salvo.", "success"],
+    price_deleted:    ["Preço removido.", "success"],
+    price_invalid:    ["Preço ou período inválidos.", "error"],
+    price_failed:     ["Falha ao salvar o preço.", "error"],
+    price_activated:  ["Período ativado. Novos cadastros usam esse preço; grandfathering preservado.", "success"],
+    sync_unavailable: ["Sync de períodos não-mensais aguardando API do ValidaPay. O preço fica salvo localmente.", "warn"],
   };
   const [text, kind] = args.message ? msgs[args.message] ?? [args.message, "error"] : ["", ""];
 
-  // Default active tab: if "_new" requested or no addons, show new form
   const ids = new Set(args.addons.map((a) => a.id));
   const activeId = args.activeTabId === "_new" || !ids.has(args.activeTabId)
     ? (ids.has(args.activeTabId) ? args.activeTabId : args.addons[0]?.id ?? "_new")
     : args.activeTabId;
   const isNewActive = activeId === "_new" || args.addons.length === 0;
 
-  const tabs = args.addons.map((a) => `
+  const tabs = args.addons.map((a) => {
+    const prices = args.pricesByAddon.get(a.id) ?? [];
+    const active = prices.find((p) => p.isActive);
+    const synced = !!active?.validapayPriceId;
+    return `
     <a href="?tab=${esc(a.id)}" class="plan-tab${a.id === activeId && !isNewActive ? " active" : ""}">
       ${esc(a.name)}
-      ${a.validapayPriceId ? `<span class="tab-dot" style="background:var(--ax-success)"></span>` : `<span class="tab-dot" style="background:var(--ax-warn)"></span>`}
-    </a>`).join("");
+      ${synced ? `<span class="tab-dot" style="background:var(--ax-success)"></span>` : `<span class="tab-dot" style="background:var(--ax-warn)"></span>`}
+    </a>`;
+  }).join("");
   const newTab = `<a href="?tab=_new" class="plan-tab${isNewActive ? " active" : ""}" style="border-left:1px dashed var(--ax-border);margin-left:8px;padding-left:14px">+ Novo</a>`;
 
   return `
@@ -590,7 +730,7 @@ ${text ? `<div class="ax-msg ${kind}">${esc(text)}</div>` : ""}
 
 <div class="plan-tabs">${tabs}${newTab}</div>
 
-${args.addons.map((a) => addonTabHtml(a, { isActive: a.id === activeId && !isNewActive })).join("")}
+${args.addons.map((a) => addonTabHtml(a, { isActive: a.id === activeId && !isNewActive, prices: args.pricesByAddon.get(a.id) ?? [] })).join("")}
 ${addonNewTabHtml(isNewActive)}`;
 }
 
@@ -809,67 +949,79 @@ function fmtBrl(n: number): string {
   return `R$ ${n.toFixed(2).replace(".", ",")}`;
 }
 
-function planPricesSectionHtml(
-  planId: string,
-  prices: Array<import("./lib/plan-prices.ts").PlanPrice>,
-): string {
-  // All recurrences as first-class options. The customer at signup
-  // picks one of those that have an amount + ValidaPay sync. MONTHLY
-  // syncs through the existing createProductWithMonthlyPrice path;
-  // the others stub until ValidaPay ships the recurrence API.
-  const periods: Array<{ key: "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL"; label: string; months: number }> = [
+// Generic helper used by both Plans and Add-ons period tables.
+// kind controls the action URLs ("plans"|"addons") and labels.
+function periodsTableHtml(args: {
+  ownerId: string;
+  kind: "plans" | "addons";
+  prices: Array<{ id: string; recurrence: import("./lib/plan-prices.ts").Recurrence; amountBrl: number; isActive: boolean; validapayPriceId: string | null }>;
+}): string {
+  const periods: Array<{ key: import("./lib/plan-prices.ts").Recurrence; label: string; months: number }> = [
     { key: "MONTHLY",     label: "Mensal",     months: 1 },
     { key: "QUARTERLY",   label: "Trimestral", months: 3 },
     { key: "SEMI_ANNUAL", label: "Semestral",  months: 6 },
     { key: "ANNUAL",      label: "Anual",      months: 12 },
   ];
-  const byKey = new Map(prices.map((p) => [p.recurrence, p]));
+  const byKey = new Map(args.prices.map((p) => [p.recurrence, p]));
   const monthly = byKey.get("MONTHLY");
+  const activePrice = args.prices.find((p) => p.isActive);
   const fmt = (n: number) => `R$ ${n.toFixed(2).replace(".", ",")}`;
   const hint = (months: number): string => {
     if (months === 1 || monthly == null) return "";
-    const fullPrice = monthly.amountBrl * months;
-    return `<span style="color:var(--ax-text-mute);font-size:11.5px;margin-left:6px">≈ ${fmt(fullPrice)} sem desconto (${fmt(monthly.amountBrl)} × ${months})</span>`;
+    const full = monthly.amountBrl * months;
+    return `<span style="color:var(--ax-text-mute);font-size:11.5px;margin-left:6px">≈ ${fmt(full)} sem desconto (${fmt(monthly.amountBrl)} × ${months})</span>`;
   };
+  const actionBase = `/super-admin/${args.kind}/${esc(args.ownerId)}/prices`;
+  const ownerLabel = args.kind === "plans" ? "plano" : "add-on";
 
   return `
 <h3 style="margin-top:28px;font-size:13px;color:var(--ax-text-mute);text-transform:uppercase;letter-spacing:0.05em">Períodos de cobrança</h3>
-<p class="help" style="margin:6px 0 14px">Defina preço e sincronize com ValidaPay para cada período em que o plano é oferecido. Mensal sincroniza agora; Trimestral/Semestral/Anual aguardam o ValidaPay publicar a rota de recurrence.</p>
+<p class="help" style="margin:6px 0 14px">
+  Exatamente um período fica <strong>ativo</strong> por vez. Novos cadastros usam o ativo;
+  quem já assinou um período antigo continua nele (grandfathered).
+  ${activePrice ? `Hoje ativo: <strong>${periods.find((p) => p.key === activePrice.recurrence)?.label ?? activePrice.recurrence} (${fmt(activePrice.amountBrl)})</strong>.` : `Nenhum período ativo — esse ${ownerLabel} não pode ser comprado.`}
+</p>
 <table class="ax-table" style="font-size:13px">
-  <tr><th style="width:140px">Período</th><th style="width:240px">Preço total</th><th>Status ValidaPay</th><th style="width:220px;text-align:right">Ações</th></tr>
+  <tr><th style="width:140px">Período</th><th style="width:240px">Preço total</th><th>Status</th><th style="width:280px;text-align:right">Ações</th></tr>
   ${periods.map((per) => {
     const cur = byKey.get(per.key);
     const synced = !!cur?.validapayPriceId;
-    const syncDisabledAttrs = per.key === "MONTHLY"
-      ? ""
-      : ` disabled title="Aguardando ValidaPay liberar API de recurrence não-mensal"`;
-    return `<tr>
+    const isActive = !!cur?.isActive;
+    const syncDisabled = per.key !== "MONTHLY";
+    return `<tr style="${isActive ? "background:#f0faf3" : ""}">
       <td><strong>${per.label}</strong>${hint(per.months)}</td>
       <td>
-        <form method="POST" action="/super-admin/plans/${esc(planId)}/prices" style="display:flex;gap:6px">
+        <form method="POST" action="${actionBase}" style="display:flex;gap:6px">
           <input type="hidden" name="recurrence" value="${per.key}">
           <input name="amount_brl" type="number" step="0.01" value="${cur?.amountBrl ?? ""}" placeholder="0.00" style="width:140px">
           <button type="submit" class="ax-btn sm">${cur ? "Salvar" : "Definir"}</button>
         </form>
       </td>
-      <td>${
-        cur == null
-          ? `<span style="color:var(--ax-text-mute)">—</span>`
+      <td>
+        ${isActive ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">★ ATIVO</span>` : ""}
+        ${cur == null
+          ? `<span style="color:var(--ax-text-mute);margin-left:4px">—</span>`
           : synced
-            ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">● ${esc(cur.validapayPriceId ?? "sync")}</span>`
+            ? `<span class="ax-badge" style="background:var(--ax-surface-2);color:var(--ax-text-soft);margin-left:4px">● ValidaPay</span>`
             : per.key === "MONTHLY"
-              ? `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ não sincronizado</span>`
-              : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ aguardando API</span>`
-      }</td>
+              ? `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00;margin-left:4px">○ sem sync</span>`
+              : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00;margin-left:4px">○ aguardando API</span>`
+        }
+      </td>
       <td style="text-align:right">
         ${cur ? `
-          <form method="POST" action="/super-admin/plans/${esc(planId)}/prices/sync-validapay" style="display:inline">
+          ${!isActive && synced ? `
+          <form method="POST" action="${actionBase}/activate" style="display:inline" onsubmit="return confirm('Ativar ${per.label}? Os outros períodos ficarão inativos. Quem já assinou continua na assinatura atual.')">
             <input type="hidden" name="recurrence" value="${per.key}">
-            <button type="submit" class="ax-btn ghost sm"${syncDisabledAttrs}>${synced ? "Re-sync" : "Sync"}</button>
+            <button type="submit" class="ax-btn sm">Ativar</button>
+          </form>` : ""}
+          <form method="POST" action="${actionBase}/sync-validapay" style="display:inline">
+            <input type="hidden" name="recurrence" value="${per.key}">
+            <button type="submit" class="ax-btn ghost sm"${syncDisabled ? ` disabled title="Aguardando ValidaPay liberar API de recurrence não-mensal"` : ""}>${synced ? "Re-sync" : "Sync"}</button>
           </form>
-          <form method="POST" action="/super-admin/plans/${esc(planId)}/prices/delete" style="display:inline" onsubmit="return confirm('Remover este período?')">
+          <form method="POST" action="${actionBase}/delete" style="display:inline" onsubmit="return confirm('Remover este período?')">
             <input type="hidden" name="recurrence" value="${per.key}">
-            <button type="submit" class="ax-btn ghost sm" style="color:var(--ax-danger)">Remover</button>
+            <button type="submit" class="ax-btn ghost sm" style="color:var(--ax-danger)" ${isActive ? "disabled title=\"Desative outro primeiro\"" : ""}>Remover</button>
           </form>` : ""}
       </td>
     </tr>`;
@@ -877,7 +1029,22 @@ function planPricesSectionHtml(
 </table>`;
 }
 
+function planPricesSectionHtml(
+  planId: string,
+  prices: Array<import("./lib/plan-prices.ts").PlanPrice>,
+): string {
+  return periodsTableHtml({
+    ownerId: planId,
+    kind: "plans",
+    prices: prices.map((p) => ({
+      id: p.id, recurrence: p.recurrence, amountBrl: p.amountBrl,
+      isActive: p.isActive, validapayPriceId: p.validapayPriceId,
+    })),
+  });
+}
+
 function planTabHtml(p: PlanRowFull, args: { isActive: boolean; prices: Array<import("./lib/plan-prices.ts").PlanPrice> }): string {
+  const activePrice = args.prices.find((pp) => pp.isActive);
   const monthly = args.prices.find((pp) => pp.recurrence === "MONTHLY");
   const monthlyAmount = monthly?.amountBrl ?? null;
   const m = calcMargin({
@@ -886,19 +1053,15 @@ function planTabHtml(p: PlanRowFull, args: { isActive: boolean; prices: Array<im
     kbBytes: p.kb_size_bytes != null ? Number(p.kb_size_bytes) : null,
   });
   const marginColor = m.marginPct >= 50 ? "var(--ax-success)" : m.marginPct >= 25 ? "var(--ax-warn)" : "var(--ax-danger)";
-  const hasAnyPrice = args.prices.length > 0;
+  const recLabel: Record<string, string> = { MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMI_ANNUAL: "Semestral", ANNUAL: "Anual" };
   return `
 <div class="ax-card" style="display:${args.isActive ? "block" : "none"}" data-plan-panel="${esc(p.id)}">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
     <h2 style="margin:0">${esc(p.name)}</h2>
     <code style="font-size:12px;color:var(--ax-text-mute)">${esc(p.id)}</code>
-    ${monthly?.validapayPriceId
-      ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">● Mensal sync</span>`
-      : monthly
-        ? `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ Mensal não sincronizado</span>`
-        : !hasAnyPrice
-          ? `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ sem preço</span>`
-          : `<span class="ax-badge" style="background:var(--ax-surface-2);color:var(--ax-text-soft)">apenas períodos longos</span>`}
+    ${activePrice
+      ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">★ ${esc(recLabel[activePrice.recurrence] ?? activePrice.recurrence)} ativo: R$ ${activePrice.amountBrl.toFixed(2).replace(".", ",")}</span>`
+      : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00">○ sem período ativo</span>`}
   </div>
 
   <form method="POST" action="/super-admin/plans/${esc(p.id)}" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
@@ -936,16 +1099,17 @@ function plansHtml(args: {
   activeTabId: string;
 }): string {
   const msgs: Record<string, [string, "success" | "error" | "warn"]> = {
-    plan_saved:        ["Plano atualizado.", "success"],
-    sync_ok:           ["Plano sincronizado com ValidaPay.", "success"],
+    plan_saved:        ["Capacidades atualizadas.", "success"],
+    sync_ok:           ["Sincronizado com ValidaPay.", "success"],
     sync_failed:       ["Falha ao sincronizar com ValidaPay. Veja logs.", "error"],
-    sync_needs_price:  ["Configure o preço BRL primeiro.", "error"],
+    sync_needs_price:  ["Defina o preço primeiro.", "error"],
     plan_not_found:    ["Plano não encontrado.", "error"],
-    price_saved:       ["Periodicidade salva.", "success"],
-    price_deleted:     ["Periodicidade removida.", "success"],
-    price_invalid:     ["Preço ou periodicidade inválidos.", "error"],
-    price_failed:      ["Falha ao salvar a periodicidade.", "error"],
-    sync_unavailable:  ["Sync de periodicidades não-mensais aguardando API do ValidaPay. O preço fica salvo localmente.", "warn"],
+    price_saved:       ["Preço salvo.", "success"],
+    price_deleted:     ["Preço removido.", "success"],
+    price_invalid:     ["Preço ou período inválidos.", "error"],
+    price_failed:      ["Falha ao salvar o preço.", "error"],
+    price_activated:   ["Período ativado. Novos cadastros usam esse preço; quem já tava na assinatura anterior segue grandfathered.", "success"],
+    sync_unavailable:  ["Sync de períodos não-mensais aguardando API do ValidaPay. O preço fica salvo localmente.", "warn"],
   };
   const [msgText, msgKind] = args.message ? msgs[args.message] ?? [args.message, "error"] : ["", ""];
   const activeId = args.plans.find((p) => p.id === args.activeTabId) ? args.activeTabId : args.plans[0]?.id ?? "";
@@ -994,8 +1158,13 @@ export type SuperAdminRouteMatch =
   | { type: "addon-create" }
   | { type: "addon-update"; id: string }
   | { type: "addon-sync"; id: string }
+  | { type: "addon-price-upsert"; addonId: string }
+  | { type: "addon-price-delete"; addonId: string }
+  | { type: "addon-price-activate"; addonId: string }
+  | { type: "addon-price-sync"; addonId: string }
   | { type: "plan-price-upsert"; planId: string }
   | { type: "plan-price-delete"; planId: string }
+  | { type: "plan-price-activate"; planId: string }
   | { type: "plan-price-sync"; planId: string }
   | { type: "logout" };
 
@@ -1022,13 +1191,24 @@ export function matchSuperAdminRoute(suffix: string, method: string): SuperAdmin
   if (method === "POST" && addonSync) return { type: "addon-sync", id: addonSync[1] };
   const addonUp = path.match(/^\/addons\/([a-z0-9_-]+)$/i);
   if (method === "POST" && addonUp) return { type: "addon-update", id: addonUp[1] };
-  // Phase 8.4: plan recurrence prices
+  // Phase 8.4-8.5: plan recurrence prices
   const planPriceSync = path.match(/^\/plans\/([a-z0-9_-]+)\/prices\/sync-validapay$/i);
   if (method === "POST" && planPriceSync) return { type: "plan-price-sync", planId: planPriceSync[1] };
+  const planPriceAct = path.match(/^\/plans\/([a-z0-9_-]+)\/prices\/activate$/i);
+  if (method === "POST" && planPriceAct) return { type: "plan-price-activate", planId: planPriceAct[1] };
   const planPriceDel = path.match(/^\/plans\/([a-z0-9_-]+)\/prices\/delete$/i);
   if (method === "POST" && planPriceDel) return { type: "plan-price-delete", planId: planPriceDel[1] };
   const planPriceUp = path.match(/^\/plans\/([a-z0-9_-]+)\/prices$/i);
   if (method === "POST" && planPriceUp) return { type: "plan-price-upsert", planId: planPriceUp[1] };
+  // Phase 8.5: addon recurrence prices (mirror of plan-prices)
+  const addonPriceSync = path.match(/^\/addons\/([a-z0-9_-]+)\/prices\/sync-validapay$/i);
+  if (method === "POST" && addonPriceSync) return { type: "addon-price-sync", addonId: addonPriceSync[1] };
+  const addonPriceAct = path.match(/^\/addons\/([a-z0-9_-]+)\/prices\/activate$/i);
+  if (method === "POST" && addonPriceAct) return { type: "addon-price-activate", addonId: addonPriceAct[1] };
+  const addonPriceDel = path.match(/^\/addons\/([a-z0-9_-]+)\/prices\/delete$/i);
+  if (method === "POST" && addonPriceDel) return { type: "addon-price-delete", addonId: addonPriceDel[1] };
+  const addonPriceUp = path.match(/^\/addons\/([a-z0-9_-]+)\/prices$/i);
+  if (method === "POST" && addonPriceUp) return { type: "addon-price-upsert", addonId: addonPriceUp[1] };
   return null;
 }
 
@@ -1052,9 +1232,14 @@ export async function handleSuperAdminRoute(
     case "addon-create":   return addonCreate(req, res);
     case "addon-update":   return addonUpdate(match.id, req, res);
     case "addon-sync":     return addonSyncToValidapay(match.id, req, res);
-    case "plan-price-upsert": return planPriceUpsert(match.planId, req, res);
-    case "plan-price-delete": return planPriceDeleteH(match.planId, req, res);
-    case "plan-price-sync":   return planPriceSyncToValidapay(match.planId, req, res);
+    case "plan-price-upsert":   return planPriceUpsert(match.planId, req, res);
+    case "plan-price-delete":   return planPriceDeleteH(match.planId, req, res);
+    case "plan-price-activate": return planPriceActivate(match.planId, req, res);
+    case "plan-price-sync":     return planPriceSyncToValidapay(match.planId, req, res);
+    case "addon-price-upsert":   return addonPriceUpsert(match.addonId, req, res);
+    case "addon-price-delete":   return addonPriceDeleteH(match.addonId, req, res);
+    case "addon-price-activate": return addonPriceActivate(match.addonId, req, res);
+    case "addon-price-sync":     return addonPriceSyncToValidapay(match.addonId, req, res);
     case "logout":         return logout(req, res);
   }
 }

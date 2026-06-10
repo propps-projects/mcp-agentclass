@@ -975,8 +975,27 @@ async function addonsListT(tenant: Tenant, req: IncomingMessage, res: ServerResp
   const admin = await requireAdmin(tenant, req, res);
   if (!admin) return;
   const { listAddons, listTenantAddons } = await import("./lib/addons.ts");
-  const catalog = await listAddons({ publicOnly: true });
+  const { getActivePricesByAddonId } = await import("./lib/addon-prices.ts");
+  // Catalog filters out addons without an active price (nothing to sell)
+  const allAddons = await listAddons({ publicOnly: true });
+  const catalogPrices = await getActivePricesByAddonId(allAddons.map((a) => a.id));
+  const catalog = allAddons.filter((a) => catalogPrices.get(a.id) != null);
   const mine = await listTenantAddons(tenant.id);
+  // Hydrate tenant_addons with the price they're actually paying (may be inactive now)
+  const allMyPriceIds = Array.from(new Set(mine.map((m) => m.addonPriceId).filter(Boolean) as string[]));
+  const myPriceMap = new Map<string, import("./lib/addon-prices.ts").AddonPrice>();
+  if (allMyPriceIds.length) {
+    const rows = await sb.select<{
+      id: string; addon_id: string; recurrence: import("./lib/plan-prices.ts").Recurrence;
+      amount_brl: string | number; is_active: boolean;
+      validapay_product_id: string | null; validapay_price_id: string | null;
+    }>("addon_prices", `id=in.(${allMyPriceIds.join(",")})&select=*`);
+    for (const r of rows) myPriceMap.set(r.id, {
+      id: r.id, addonId: r.addon_id, recurrence: r.recurrence,
+      amountBrl: Number(r.amount_brl), isActive: r.is_active,
+      validapayProductId: r.validapay_product_id, validapayPriceId: r.validapay_price_id,
+    });
+  }
   const url = new URL(req.url ?? "/", "http://x");
   html(res, 200, await layoutHtml({
     title: "Add-ons",
@@ -987,7 +1006,14 @@ async function addonsListT(tenant: Tenant, req: IncomingMessage, res: ServerResp
     tenantPlanId: tenant.planId,
     activeNav: "addons",
     admin,
-    body: addonsTHtml({ catalog, mine, isTrial: tenant.status === "trial", msg: url.searchParams.get("msg") ?? undefined }),
+    body: addonsTHtml({
+      catalog,
+      catalogPrices,
+      mine,
+      myPriceMap,
+      isTrial: tenant.status === "trial",
+      msg: url.searchParams.get("msg") ?? undefined,
+    }),
   }));
 }
 
@@ -998,9 +1024,11 @@ async function addonBuyT(tenant: Tenant, addonId: string, req: IncomingMessage, 
     return redirect(res, `${adminBase(tenant)}/addons?msg=trial_blocks_addons`);
   }
   const { getAddon, createTenantAddon } = await import("./lib/addons.ts");
+  const { getActiveAddonPrice } = await import("./lib/addon-prices.ts");
   const addon = await getAddon(addonId);
   if (!addon) return redirect(res, `${adminBase(tenant)}/addons?msg=addon_not_found`);
-  if (!addon.validapayPriceId) {
+  const activePrice = await getActiveAddonPrice(addonId);
+  if (!activePrice?.validapayPriceId) {
     return redirect(res, `${adminBase(tenant)}/addons?msg=addon_not_synced`);
   }
 
@@ -1015,13 +1043,14 @@ async function addonBuyT(tenant: Tenant, addonId: string, req: IncomingMessage, 
   try {
     const { createCheckoutSession } = await import("./lib/validapay.ts");
     const session = await createCheckoutSession({
-      priceId: addon.validapayPriceId,
+      priceId: activePrice.validapayPriceId,
       customer: { email: tRow.contact_email, documentNumber: tRow.contact_document },
       allowedPaymentMethods: ["pix", "creditcard"],
     });
     await createTenantAddon({
       tenantId: tenant.id,
       addonId: addon.id,
+      addonPriceId: activePrice.id,
       checkoutId: session.id,
     });
     // Redirect the tenant straight to the ValidaPay checkout page
@@ -1051,7 +1080,9 @@ async function addonCancelT(tenant: Tenant, tenantAddonId: string, req: Incoming
 
 function addonsTHtml(args: {
   catalog: Array<import("./lib/addons.ts").Addon>;
+  catalogPrices: Map<string, import("./lib/addon-prices.ts").AddonPrice>;
   mine: Array<import("./lib/addons.ts").TenantAddon>;
+  myPriceMap: Map<string, import("./lib/addon-prices.ts").AddonPrice>;
   isTrial: boolean;
   msg?: string;
 }): string {
@@ -1073,6 +1104,9 @@ function addonsTHtml(args: {
   const kindBadge = (k: string) => ({
     more_courses: "+ Cursos", more_hours: "+ Horas", more_students: "+ Alunos", more_kb: "+ Storage",
   } as Record<string, string>)[k] ?? k;
+  const recLabel = (r: import("./lib/plan-prices.ts").Recurrence) => ({
+    MONTHLY: "mês", QUARTERLY: "trimestre", SEMI_ANNUAL: "semestre", ANNUAL: "ano",
+  } as Record<string, string>)[r] ?? r;
 
   return `
 <h1>Add-ons</h1>
@@ -1087,13 +1121,15 @@ ${myActive.length > 0 ? `
     ${myActive.map((m) => {
       const a = addonById.get(m.addonId);
       if (!a) return "";
+      const pp = m.addonPriceId ? args.myPriceMap.get(m.addonPriceId) : null;
+      const priceLabel = pp ? `${fmtBrl(pp.amountBrl)}/${recLabel(pp.recurrence)}` : "—";
       return `<div class="card" style="background:#f5fbf6;border-color:#cfe9d6">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
           <strong>${esc(a.name)}</strong>
           <span class="badge" style="background:#e8f5e9;color:#1e6f3e;padding:2px 8px;border-radius:99px;font-size:11px">Ativo</span>
         </div>
         <p class="help" style="margin:0 0 12px">${esc(a.description ?? "")}</p>
-        <div style="font-size:13px;color:#444">${esc(fmtBrl(a.monthlyPriceBrl))}/mês</div>
+        <div style="font-size:13px;color:#444">${esc(priceLabel)}</div>
         <form method="POST" action="addons/${esc(m.id)}/cancel" onsubmit="return confirm('Cancelar este add-on?')" style="margin-top:10px">
           <button type="submit" class="danger" style="padding:5px 12px;font-size:12px">Cancelar</button>
         </form>
@@ -1117,20 +1153,23 @@ ${args.catalog.length === 0 ? `
   <div class="card">Nenhum add-on disponível por enquanto.</div>
 ` : `
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
-  ${args.catalog.map((a) => `
+  ${args.catalog.map((a) => {
+    const pp = args.catalogPrices.get(a.id);
+    const buyable = !!pp?.validapayPriceId && !args.isTrial;
+    const cta = !pp?.validapayPriceId ? "Em breve" : args.isTrial ? "Bloqueado em trial" : "Escolher esse";
+    return `
     <div class="card">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
         <strong>${esc(a.name)}</strong>
         <span class="badge" style="background:#f4f4f5;color:#555;padding:2px 8px;border-radius:99px;font-size:11px">${esc(kindBadge(a.kind))}</span>
       </div>
       <p class="help" style="margin:0 0 14px">${esc(a.description ?? "")}</p>
-      <div style="font-size:24px;font-weight:600;letter-spacing:-0.02em">${esc(fmtBrl(a.monthlyPriceBrl))}<span style="font-size:13px;color:#999;font-weight:400"> /mês</span></div>
+      <div style="font-size:24px;font-weight:600;letter-spacing:-0.02em">${esc(fmtBrl(pp?.amountBrl ?? 0))}<span style="font-size:13px;color:#999;font-weight:400"> /${recLabel(pp?.recurrence ?? "MONTHLY")}</span></div>
       <form method="POST" action="addons/${esc(a.id)}/buy" style="margin-top:14px">
-        <button type="submit" ${args.isTrial ? "disabled" : ""} ${!a.validapayPriceId ? "disabled" : ""} style="width:100%">
-          ${!a.validapayPriceId ? "Em breve" : args.isTrial ? "Bloqueado em trial" : "Escolher esse"}
-        </button>
+        <button type="submit" ${!buyable ? "disabled" : ""} style="width:100%">${cta}</button>
       </form>
-    </div>`).join("")}
+    </div>`;
+  }).join("")}
 </div>
 `}`;
 }
@@ -1333,7 +1372,7 @@ async function planPage(tenant: Tenant, req: IncomingMessage, res: ServerRespons
   if (!admin) return;
 
   const { getPlan, listPlans, getUsage } = await import("./lib/plans.ts");
-  const { getMonthlyPricesByPlanId } = await import("./lib/plan-prices.ts");
+  const { getActivePricesByPlanId } = await import("./lib/plan-prices.ts");
   const [current, allPlans] = await Promise.all([
     getPlan(tenant.planId),
     listPlans({ publicOnly: true }),
@@ -1352,7 +1391,7 @@ async function planPage(tenant: Tenant, req: IncomingMessage, res: ServerRespons
     }));
   }
   const usage = await getUsage(tenant.id, current, tenant.status);
-  const priceMap = await getMonthlyPricesByPlanId(allPlans.map((p) => p.id));
+  const priceMap = await getActivePricesByPlanId(allPlans.map((p) => p.id));
 
   html(res, 200, await layoutHtml({
     title: "Plano e Uso",

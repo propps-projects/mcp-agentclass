@@ -28,11 +28,8 @@ export interface Addon {
   description: string | null;
   kind: AddonKind;
   incrementValue: number;
-  monthlyPriceBrl: number;
   isPublic: boolean;
   displayOrder: number;
-  validapayProductId: string | null;
-  validapayPriceId: string | null;
 }
 
 interface AddonRow {
@@ -41,11 +38,8 @@ interface AddonRow {
   description: string | null;
   kind: AddonKind;
   increment_value: string | number;
-  monthly_price_brl: string | number;
   is_public: boolean;
   display_order: number;
-  validapay_product_id: string | null;
-  validapay_price_id: string | null;
 }
 
 function mapAddon(r: AddonRow): Addon {
@@ -55,11 +49,8 @@ function mapAddon(r: AddonRow): Addon {
     description: r.description,
     kind: r.kind,
     incrementValue: Number(r.increment_value),
-    monthlyPriceBrl: Number(r.monthly_price_brl),
     isPublic: r.is_public,
     displayOrder: r.display_order,
-    validapayProductId: r.validapay_product_id,
-    validapayPriceId: r.validapay_price_id,
   };
 }
 
@@ -76,8 +67,7 @@ export async function getAddon(id: string): Promise<Addon | null> {
 
 export async function updateAddon(id: string, patch: Partial<{
   name: string; description: string | null; kind: AddonKind;
-  increment_value: number; monthly_price_brl: number; is_public: boolean;
-  display_order: number; validapay_product_id: string | null; validapay_price_id: string | null;
+  increment_value: number; is_public: boolean; display_order: number;
 }>): Promise<void> {
   await sb.update("addons", `id=eq.${encodeURIComponent(id)}`, {
     ...patch, updated_at: new Date().toISOString(),
@@ -90,6 +80,7 @@ export interface TenantAddon {
   id: string;
   tenantId: string;
   addonId: string;
+  addonPriceId: string | null;
   quantity: number;
   status: TenantAddonStatus;
   validapaySubscriptionId: string | null;
@@ -103,6 +94,7 @@ interface TenantAddonRow {
   id: string;
   tenant_id: string;
   addon_id: string;
+  addon_price_id: string | null;
   quantity: number;
   status: TenantAddonStatus;
   validapay_subscription_id: string | null;
@@ -114,7 +106,9 @@ interface TenantAddonRow {
 
 function mapTenantAddon(r: TenantAddonRow): TenantAddon {
   return {
-    id: r.id, tenantId: r.tenant_id, addonId: r.addon_id, quantity: r.quantity, status: r.status,
+    id: r.id, tenantId: r.tenant_id, addonId: r.addon_id,
+    addonPriceId: r.addon_price_id,
+    quantity: r.quantity, status: r.status,
     validapaySubscriptionId: r.validapay_subscription_id, validapayCheckoutId: r.validapay_checkout_id,
     activeUntil: r.active_until, canceledAt: r.canceled_at, createdAt: r.created_at,
   };
@@ -139,11 +133,13 @@ export async function findTenantAddonBySubscription(subId: string): Promise<Tena
 export async function createTenantAddon(args: {
   tenantId: string;
   addonId: string;
+  addonPriceId: string;
   checkoutId: string;
 }): Promise<TenantAddon> {
   const inserted = await sb.insert<TenantAddonRow>("tenant_addons", {
     tenant_id: args.tenantId,
     addon_id: args.addonId,
+    addon_price_id: args.addonPriceId,
     quantity: 1,
     status: "pending",
     validapay_checkout_id: args.checkoutId,
