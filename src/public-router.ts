@@ -7,6 +7,7 @@
  */
 
 import { IncomingMessage, ServerResponse } from "node:http";
+import { handleBrandRoute } from "./brand-router.ts";
 import { sb } from "./lib/db-api.ts";
 import { inviteAdmin } from "./lib/tenant-admin.ts";
 import { createCheckoutSession } from "./lib/validapay.ts";
@@ -705,7 +706,7 @@ export async function handlePublicRoute(
     case "contact":         return legalPage(res, "contact");
     case "about":           return legalPage(res, "about");
     case "logo-svg":        return assetPage(res, LOGO_SVG, "image/svg+xml");
-    case "favicon":         return assetPage(res, FAVICON_SVG, "image/svg+xml");
+    case "favicon":         return handleBrandRoute("/brand/favicon.png", res);
     case "og-image":        return assetPage(res, OG_IMAGE_SVG, "image/svg+xml");
     case "home":            return homePage(req, res);
   }
@@ -731,8 +732,6 @@ const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" wi
   <rect width="64" height="64" rx="14" fill="url(#g)"/>
   <path d="M20 46 L32 18 L44 46 M25 38 L39 38" stroke="#f1f5f9" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
-
-const FAVICON_SVG = LOGO_SVG;
 
 // 1200×630 Open Graph card — gradient background + Askine wordmark +
 // tagline. Will render fine on social previews; replace with a real
@@ -999,7 +998,7 @@ function homeHtml(): string {
 // boilerplate across each route.
 function pageMeta(args: { title: string; description: string }): string {
   return `
-  <link rel="icon" type="image/svg+xml" href="/brand/ico-logo-black.svg">
+  <link rel="icon" type="image/png" href="/brand/favicon.png">
   <meta name="description" content="${esc(args.description)}">
   <meta property="og:title" content="${esc(args.title)}">
   <meta property="og:description" content="${esc(args.description)}">

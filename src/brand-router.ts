@@ -14,6 +14,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ASSETS_DIR = join(__dirname, "..", "assets");
 
 const ASSET_FILES: Record<string, { file: string; contentType: string }> = {
+  "/brand/favicon.png":        { file: "favicon.png",        contentType: "image/png" },
   "/brand/logo-black.svg":     { file: "logo-black.svg",     contentType: "image/svg+xml" },
   "/brand/logo-white.svg":     { file: "logo-white.svg",     contentType: "image/svg+xml" },
   "/brand/logo-black.png":     { file: "logo-black.png",     contentType: "image/png" },

@@ -93,7 +93,7 @@ export function adminShell(args: ShellArgs): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(docTitle)}</title>
-<link rel="icon" type="image/svg+xml" href="/brand/ico-logo-black.svg">
+<link rel="icon" type="image/png" href="/brand/favicon.png">
 ${args.extraHead ?? ""}
 <style>${ADMIN_SHELL_CSS}</style>
 </head>

@@ -991,7 +991,7 @@ function layoutHtml(args: {
   if (!args.admin) {
     return `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(args.title)} — ${esc(args.tenantName)}</title>
-<link rel="icon" type="image/svg+xml" href="/brand/ico-logo-black.svg">
+<link rel="icon" type="image/png" href="/brand/favicon.png">
 <style>${ADMIN_SHELL_CSS}
   .ax-auth-wrap { min-height: 100vh; display:flex; align-items:center; justify-content:center; padding: 32px 16px; background: var(--ax-surface-2) }
   .ax-auth-card { background: var(--ax-surface); border: 1px solid var(--ax-border); border-radius: var(--ax-radius-lg); padding: 32px; max-width: 420px; width: 100%; box-shadow: var(--ax-shadow-md) }
