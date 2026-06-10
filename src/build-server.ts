@@ -53,10 +53,19 @@ export function buildServer(
   auth: AuthCtx = { studentId: null, accessibleCourseIds: null, mcpUser: null, accessibleCourses: null },
 ): McpServer {
   const isGlobal = !!auth.mcpUser;
+  // Public base URL — used to advertise the connector icon (MCP `icons` field
+  // in serverInfo) so clients like Claude.ai render the Askine logo instead of
+  // a generic globe. Served raster PNG via /brand/favicon.png with CORS `*`.
+  const baseUrl = (process.env.PUBLIC_URL ?? "http://localhost:3333").replace(/\/+$/, "");
   const server = new McpServer(
     {
       name: isGlobal ? "askine" : tenant ? `askine-${tenant.slug}` : "agentclass",
       version: "0.1.0",
+      title: "Askine",
+      websiteUrl: baseUrl,
+      icons: [
+        { src: `${baseUrl}/brand/favicon.png`, mimeType: "image/png", sizes: ["300x300"] },
+      ],
     },
     {
       capabilities: { tools: {}, resources: {} },
