@@ -1017,6 +1017,126 @@ async function addonsListT(tenant: Tenant, req: IncomingMessage, res: ServerResp
   }));
 }
 
+/**
+ * Phase 11.1: change the tenant's plan via ValidaPay's subscription update API.
+ *
+ * Flow: tenant clicks "Trocar pra Pro" → POST /admin/plan/change with
+ *   targetPlanId. We resolve the target plan's ACTIVE price (must be synced
+ *   to ValidaPay so it has a validapayPriceId). Then:
+ *   - If tenant has no validapay_subscription_id (trial or never paid),
+ *     fall back to a fresh checkout session — same flow as a new signup.
+ *   - If tenant has an existing ValidaPay subscription, call
+ *     changeSubscriptionPrice — ValidaPay decides immediately whether the
+ *     change is an upgrade (pro-rata charged now) or downgrade (effective
+ *     next period). Either way, the webhook updates our tenants row when
+ *     it fires.
+ *
+ * Cancel works the same way for plans: POST /admin/plan/cancel → marks
+ * status canceled in ValidaPay; webhook will reflect locally.
+ */
+async function planChange(tenant: Tenant, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const admin = await requireAdmin(tenant, req, res);
+  if (!admin) return;
+  const form = await readForm(req);
+  const targetPlanId = String(form.get("target_plan_id") ?? "");
+  if (!targetPlanId) return redirect(res, `${adminBase(tenant)}/plan?msg=missing_plan`);
+  if (targetPlanId === tenant.planId) {
+    return redirect(res, `${adminBase(tenant)}/plan?msg=already_current`);
+  }
+  const { getActivePlanPrice } = await import("./lib/plan-prices.ts");
+  const targetPrice = await getActivePlanPrice(targetPlanId);
+  if (!targetPrice?.validapayPriceId) {
+    return redirect(res, `${adminBase(tenant)}/plan?msg=plan_not_synced`);
+  }
+
+  const tRow = await sb.selectOne<{
+    contact_email: string; contact_document: string | null;
+    validapay_subscription_id: string | null;
+  }>(
+    "tenants",
+    `id=eq.${tenant.id}&select=contact_email,contact_document,validapay_subscription_id`,
+  );
+  if (!tRow) return redirect(res, `${adminBase(tenant)}/plan?msg=tenant_not_found`);
+  if (!tRow.contact_document) {
+    return redirect(res, `${adminBase(tenant)}/plan?msg=missing_document`);
+  }
+
+  // Path A: tenant has an existing ValidaPay subscription → switch its
+  // price via the update API (handles prorate + scheduling internally).
+  if (tRow.validapay_subscription_id) {
+    try {
+      const { getSubscription, changeSubscriptionPrice } = await import("./lib/validapay.ts");
+      const sub = await getSubscription(tRow.validapay_subscription_id);
+      const oldItem = sub.items?.[0];
+      if (!oldItem) {
+        return redirect(res, `${adminBase(tenant)}/plan?msg=subscription_no_item`);
+      }
+      await changeSubscriptionPrice({
+        subscriptionId: tRow.validapay_subscription_id,
+        oldItemId: oldItem.itemId,
+        newPriceId: targetPrice.validapayPriceId,
+      });
+      // Update tenants.plan_id + plan_price_id locally now so the UI
+      // reflects immediately. The webhook (subscription.activated /
+      // .renewed) will also fire and reconcile billing fields.
+      await sb.update("tenants", `id=eq.${tenant.id}`, {
+        plan_id: targetPlanId,
+        plan_price_id: targetPrice.id,
+        updated_at: new Date().toISOString(),
+      });
+      return redirect(res, `${adminBase(tenant)}/plan?msg=plan_changed`);
+    } catch (err) {
+      console.error("Plan change via ValidaPay failed:", err);
+      return redirect(res, `${adminBase(tenant)}/plan?msg=change_failed`);
+    }
+  }
+
+  // Path B: no existing ValidaPay subscription → open a fresh checkout
+  // (e.g. tenant was in trial and is now upgrading to a paid plan).
+  try {
+    const { createCheckoutSession } = await import("./lib/validapay.ts");
+    const session = await createCheckoutSession({
+      priceId: targetPrice.validapayPriceId,
+      customer: { email: tRow.contact_email, documentNumber: tRow.contact_document },
+      allowedPaymentMethods: ["pix", "creditcard"],
+    });
+    // Pre-mark the intended plan locally so the webhook can match by checkout
+    // id once payment lands.
+    await sb.update("tenants", `id=eq.${tenant.id}`, {
+      plan_id: targetPlanId,
+      plan_price_id: targetPrice.id,
+      validapay_checkout_id: session.id,
+      updated_at: new Date().toISOString(),
+    });
+    res.writeHead(302, { Location: session.url }).end();
+  } catch (err) {
+    console.error("Plan checkout creation failed:", err);
+    redirect(res, `${adminBase(tenant)}/plan?msg=checkout_failed`);
+  }
+}
+
+async function planCancel(tenant: Tenant, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const admin = await requireAdmin(tenant, req, res);
+  if (!admin) return;
+  const tRow = await sb.selectOne<{ validapay_subscription_id: string | null }>(
+    "tenants", `id=eq.${tenant.id}&select=validapay_subscription_id`,
+  );
+  if (!tRow?.validapay_subscription_id) {
+    return redirect(res, `${adminBase(tenant)}/plan?msg=no_subscription`);
+  }
+  try {
+    const { cancelSubscription } = await import("./lib/validapay.ts");
+    await cancelSubscription(tRow.validapay_subscription_id);
+    // The webhook subscription.canceled will set the tenant row when it
+    // fires; we don't preemptively change status here so we don't fight
+    // the canonical billing state machine.
+    redirect(res, `${adminBase(tenant)}/plan?msg=cancel_requested`);
+  } catch (err) {
+    console.error("Plan cancel failed:", err);
+    redirect(res, `${adminBase(tenant)}/plan?msg=cancel_failed`);
+  }
+}
+
 async function addonBuyT(tenant: Tenant, addonId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const admin = await requireAdmin(tenant, req, res);
   if (!admin) return;
@@ -2129,12 +2249,26 @@ function planPageHtml(args: {
       </div>`;
   }
 
+  const isCurrent = (planId: string) => planId === args.current.id;
+  const planPrice = (planId: string) => args.priceMap.get(planId);
+  const canChange = (planId: string) => {
+    const pp = planPrice(planId);
+    return !!pp?.validapayPriceId && !isCurrent(planId);
+  };
+  const isOnTrial = args.tenant.status === "trial";
+  const hasActiveSub = args.tenant.status === "active";
+
   return `
 <h1>Plano e Uso</h1>
 <div class="card">
   <h3>Plano atual</h3>
   <p style="font-size:24px;margin:8px 0"><strong>${esc(args.current.name)}</strong></p>
-  <p>${esc(fmtPriceBrl(args.priceMap.get(args.current.id)?.amountBrl ?? null))}/mês</p>
+  <p>${esc(fmtPriceBrl(planPrice(args.current.id)?.amountBrl ?? null))}/mês</p>
+  ${hasActiveSub ? `
+    <form method="POST" action="${adminBase(args.tenant)}/plan/cancel" style="margin-top:14px" onsubmit="return confirm('Cancelar assinatura? Sua conta segue ativa até o fim do ciclo atual.')">
+      <button type="submit" class="ax-btn ghost sm" style="color:#dc2626">Cancelar assinatura</button>
+    </form>
+  ` : ""}
 </div>
 
 <h2>Uso este mês</h2>
@@ -2145,26 +2279,41 @@ function planPageHtml(args: {
   ${gauge("Arquivos (KB tutor)", args.usage.kbBytes.used, args.usage.kbBytes.limit, fmtBytes)}
 </div>
 
-<h2>Outros planos</h2>
+<h2>Mudar de plano</h2>
+<p class="help" style="margin-bottom:12px">${isOnTrial
+  ? "Escolha um plano abaixo pra sair do trial e ativar sua conta. Você será redirecionado pro checkout."
+  : "Mudança de plano é imediata via ValidaPay. Upgrade cobra o pro-rata agora; downgrade vale a partir do próximo ciclo."
+}</p>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
-  ${args.allPlans.map((p) => `
-    <div class="card" style="${p.id === args.current.id ? "border:2px solid #111;" : ""}margin:0">
-      <h3 style="margin-top:0">${esc(p.name)}${p.id === args.current.id ? " <span style=\"font-size:11px;color:#666;font-weight:400\">(atual)</span>" : ""}</h3>
-      <p style="font-size:20px;margin:8px 0"><strong>${esc(fmtPriceBrl(args.priceMap.get(p.id)?.amountBrl ?? null))}</strong>${args.priceMap.get(p.id)?.amountBrl != null ? "<span style=\"font-size:12px;color:#999\">/mês</span>" : ""}</p>
-      <ul class="help" style="padding-left:18px;margin-top:12px">
+  ${args.allPlans.map((p) => {
+    const pp = planPrice(p.id);
+    const synced = !!pp?.validapayPriceId;
+    const cta = isCurrent(p.id)
+      ? `<button class="ax-btn sm" disabled style="width:100%">Plano atual</button>`
+      : !synced
+        ? `<button class="ax-btn sm ghost" disabled style="width:100%">Em breve</button>`
+        : `<form method="POST" action="${adminBase(args.tenant)}/plan/change" onsubmit="return confirm('${isOnTrial ? "Ir pro checkout do " : "Trocar para "}${esc(p.name)}?')">
+            <input type="hidden" name="target_plan_id" value="${esc(p.id)}">
+            <button type="submit" class="ax-btn sm" style="width:100%">${isOnTrial ? "Contratar" : "Trocar para esse"}</button>
+          </form>`;
+    return `
+    <div class="card" style="${isCurrent(p.id) ? "border:2px solid #111;" : ""}margin:0">
+      <h3 style="margin-top:0">${esc(p.name)}${isCurrent(p.id) ? " <span style=\"font-size:11px;color:#666;font-weight:400\">(atual)</span>" : ""}</h3>
+      <p style="font-size:20px;margin:8px 0"><strong>${esc(fmtPriceBrl(pp?.amountBrl ?? null))}</strong>${pp?.amountBrl != null ? "<span style=\"font-size:12px;color:#999\">/mês</span>" : ""}</p>
+      <ul class="help" style="padding-left:18px;margin-top:12px;margin-bottom:16px">
         <li>${esc(limitLabel(p.maxCourses, "cursos"))}</li>
         <li>${esc(limitLabel(p.transcribeHoursMonth, "h transcrição/mês"))}</li>
         <li>${esc(limitLabel(p.activeStudentsMonth, "alunos ativos/mês"))}</li>
         <li>${p.kbSizeBytes == null ? "armazenamento ilimitado" : esc(fmtBytes(p.kbSizeBytes)) + " de arquivos"}</li>
       </ul>
-    </div>
-  `).join("")}
+      ${cta}
+    </div>`;
+  }).join("")}
 </div>
 
 <div class="card" style="margin-top:24px">
-  <h3>Mudar de plano</h3>
-  <p class="help">Por enquanto, mudança de plano é via operador. Em breve: upgrade automático com cobrança ValidaPay.</p>
-  <p class="help">Manda email pra <a href="mailto:support@askine.cc">support@askine.cc</a> com o plano desejado.</p>
+  <h3 style="margin-top:0">Precisa de algo customizado?</h3>
+  <p class="help">Pra planos Enterprise (faturamento PJ, SLAs, white-label) fale com <a href="mailto:support@askine.cc">support@askine.cc</a>.</p>
 </div>`;
 }
 
@@ -2364,6 +2513,8 @@ export type AdminRouteMatch =
   | { type: "start-ingest"; courseSlug: string }
   | { type: "course-insights"; courseSlug: string }
   | { type: "plan" }
+  | { type: "plan-change" }
+  | { type: "plan-cancel" }
   | { type: "students-import-get" }
   | { type: "students-import-post" }
   | { type: "students-list" }
@@ -2385,7 +2536,9 @@ export function matchAdminRoute(suffix: string, method: string): AdminRouteMatch
   if (method === "GET"  && path === "/login")    return { type: "login-get" };
   if (method === "POST" && path === "/login")    return { type: "login-post" };
   if (method === "GET"  && path === "/verify")   return { type: "verify" };
-  if (method === "GET"  && path === "/plan")    return { type: "plan" };
+  if (method === "GET"  && path === "/plan")           return { type: "plan" };
+  if (method === "POST" && path === "/plan/change")    return { type: "plan-change" };
+  if (method === "POST" && path === "/plan/cancel")    return { type: "plan-cancel" };
   if (method === "GET"  && path === "/integrations") return { type: "integrations-get" };
   if (method === "POST" && path === "/integrations/hotmart") return { type: "integrations-hotmart" };
   if (method === "POST" && path === "/integrations/panda")   return { type: "integrations-panda" };
@@ -2456,6 +2609,8 @@ export async function handleAdminRoute(
     case "start-ingest":        return startIngest(tenant, match.courseSlug, req, res);
     case "course-insights":     return courseInsights(tenant, match.courseSlug, req, res);
     case "plan":                return planPage(tenant, req, res);
+    case "plan-change":         return planChange(tenant, req, res);
+    case "plan-cancel":         return planCancel(tenant, req, res);
     case "students-import-get": return studentsImportGet(tenant, req, res);
     case "students-import-post": return studentsImportPost(tenant, req, res);
     case "students-list":        return studentsList(tenant, req, res);

@@ -235,10 +235,12 @@ interface PlanRowFull {
 }
 
 /**
- * Sync ValidaPay for the MONTHLY plan_price. (Migration 014: monthly
- * lives in plan_prices, no longer on the plans row.) Non-monthly
- * recurrence sync goes through /plans/:id/prices/sync-validapay
- * (stub until ValidaPay's recurrence API ships).
+ * Sync the plan's currently-active price (whatever recurrence) to ValidaPay.
+ * Phase 11.0: ValidaPay added SEMIANNUAL on 2026-06-10, so the MONTHLY-only
+ * restriction is gone — the recurrence mapping lives in lib/validapay.ts
+ * (VP_RECURRENCE). Tail-of-button on the plan tab still calls this for the
+ * active price; sub-action /plans/:id/prices/sync-validapay handles
+ * arbitrary non-active periods.
  */
 async function planSyncToValidapay(id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const sess = await requireSuperAdmin(req, res);
@@ -248,23 +250,24 @@ async function planSyncToValidapay(id: string, req: IncomingMessage, res: Server
     `id=eq.${encodeURIComponent(id)}&select=*`,
   );
   if (!plan) return redirect(res, `${publicUrl()}/super-admin/plans?msg=plan_not_found`);
-  const { getActivePlanPrice, updatePlanPriceValidapay, upsertPlanPrice } = await import("./lib/plan-prices.ts");
-  const monthly = await getActivePlanPrice(id);
-  if (!monthly) {
+  const { getActivePlanPrice, updatePlanPriceValidapay } = await import("./lib/plan-prices.ts");
+  const active = await getActivePlanPrice(id);
+  if (!active) {
     return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(id)}&msg=sync_needs_price`);
   }
   try {
-    const { createProductWithMonthlyPrice } = await import("./lib/validapay.ts");
-    const product = await createProductWithMonthlyPrice({
+    const { createProductWithPrice } = await import("./lib/validapay.ts");
+    const product = await createProductWithPrice({
       name: plan.name,
       description: `Askine ${plan.name}`,
       statementDescriptor: `ASKINE ${plan.id.toUpperCase()}`.slice(0, 22),
-      amountBrl: monthly.amountBrl,
+      recurrence: active.recurrence,
+      amountBrl: active.amountBrl,
       externalId: plan.id,
     });
     const priceId = product.prices[0]?.priceId ?? null;
     await updatePlanPriceValidapay({
-      planId: id, recurrence: "MONTHLY",
+      planId: id, recurrence: active.recurrence,
       validapayProductId: product.productId,
       validapayPriceId: priceId,
     });
@@ -386,22 +389,21 @@ async function addonSyncToValidapay(id: string, req: IncomingMessage, res: Serve
   if (!activePrice) {
     return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(id)}&msg=sync_needs_price`);
   }
-  if (activePrice.recurrence !== "MONTHLY") {
-    // Non-monthly sync stubs out until ValidaPay's recurrence API ships
-    return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(id)}&msg=sync_unavailable`);
-  }
+  // Phase 11.0: any of the four recurrences syncs cleanly via
+  // createProductWithPrice (VP_RECURRENCE handles the name translation).
   try {
-    const { createProductWithMonthlyPrice } = await import("./lib/validapay.ts");
-    const product = await createProductWithMonthlyPrice({
+    const { createProductWithPrice } = await import("./lib/validapay.ts");
+    const product = await createProductWithPrice({
       name: `Askine — ${addon.name}`,
       description: addon.description ?? addon.name,
       statementDescriptor: `ASKINE+${addon.id.toUpperCase()}`.slice(0, 22),
+      recurrence: activePrice.recurrence,
       amountBrl: activePrice.amountBrl,
       externalId: `addon_${addon.id}`,
     });
     const priceId = product.prices[0]?.priceId ?? null;
     await updateAddonPriceValidapay({
-      addonId: id, recurrence: "MONTHLY",
+      addonId: id, recurrence: activePrice.recurrence,
       validapayProductId: product.productId,
       validapayPriceId: priceId,
     });
@@ -466,28 +468,26 @@ async function addonPriceSyncToValidapay(addonId: string, req: IncomingMessage, 
   if (!sess) return;
   const form = await readForm(req);
   const recurrence = (form.get("recurrence") ?? "MONTHLY") as import("./lib/plan-prices.ts").Recurrence;
-  if (recurrence !== "MONTHLY") {
-    return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=sync_unavailable`);
-  }
   const { getAddon } = await import("./lib/addons.ts");
   const { listAddonPrices, updateAddonPriceValidapay } = await import("./lib/addon-prices.ts");
   const addon = await getAddon(addonId);
   if (!addon) return redirect(res, `${publicUrl()}/super-admin/addons?msg=addon_not_found`);
   const prices = await listAddonPrices(addonId);
-  const monthly = prices.find((p) => p.recurrence === "MONTHLY");
-  if (!monthly) return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=sync_needs_price`);
+  const target = prices.find((p) => p.recurrence === recurrence);
+  if (!target) return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=sync_needs_price`);
   try {
-    const { createProductWithMonthlyPrice } = await import("./lib/validapay.ts");
-    const product = await createProductWithMonthlyPrice({
+    const { createProductWithPrice } = await import("./lib/validapay.ts");
+    const product = await createProductWithPrice({
       name: `Askine — ${addon.name}`,
       description: addon.description ?? addon.name,
       statementDescriptor: `ASKINE+${addon.id.toUpperCase()}`.slice(0, 22),
-      amountBrl: monthly.amountBrl,
-      externalId: `addon_${addon.id}`,
+      recurrence,
+      amountBrl: target.amountBrl,
+      externalId: `addon_${addon.id}_${recurrence.toLowerCase()}`,
     });
     const priceId = product.prices[0]?.priceId ?? null;
     await updateAddonPriceValidapay({
-      addonId, recurrence: "MONTHLY",
+      addonId, recurrence,
       validapayProductId: product.productId,
       validapayPriceId: priceId,
     });
@@ -557,37 +557,34 @@ async function planPriceSyncToValidapay(planId: string, req: IncomingMessage, re
   if (!sess) return;
   const form = await readForm(req);
   const recurrence = (form.get("recurrence") ?? "MONTHLY") as import("./lib/plan-prices.ts").Recurrence;
-  // MONTHLY uses the existing createProductWithMonthlyPrice flow.
-  // Non-monthly is a stub until ValidaPay's recurrence API ships.
-  if (recurrence !== "MONTHLY") {
-    return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_unavailable`);
-  }
   const plan = await sb.selectOne<{ id: string; name: string }>("plans",
     `id=eq.${encodeURIComponent(planId)}&select=id,name`);
   if (!plan) return redirect(res, `${publicUrl()}/super-admin/plans?msg=plan_not_found`);
-  const { getActivePlanPrice, updatePlanPriceValidapay } = await import("./lib/plan-prices.ts");
-  const monthly = await getActivePlanPrice(planId);
-  if (!monthly) {
+  const { listPlanPrices, updatePlanPriceValidapay } = await import("./lib/plan-prices.ts");
+  const prices = await listPlanPrices(planId);
+  const target = prices.find((p) => p.recurrence === recurrence);
+  if (!target) {
     return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_needs_price`);
   }
   try {
-    const { createProductWithMonthlyPrice } = await import("./lib/validapay.ts");
-    const product = await createProductWithMonthlyPrice({
+    const { createProductWithPrice } = await import("./lib/validapay.ts");
+    const product = await createProductWithPrice({
       name: plan.name,
       description: `Askine ${plan.name}`,
       statementDescriptor: `ASKINE ${planId.toUpperCase()}`.slice(0, 22),
-      amountBrl: monthly.amountBrl,
-      externalId: planId,
+      recurrence,
+      amountBrl: target.amountBrl,
+      externalId: `${planId}_${recurrence.toLowerCase()}`,
     });
     const priceId = product.prices[0]?.priceId ?? null;
     await updatePlanPriceValidapay({
-      planId, recurrence: "MONTHLY",
+      planId, recurrence,
       validapayProductId: product.productId,
       validapayPriceId: priceId,
     });
     redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_ok`);
   } catch (err) {
-    console.error("ValidaPay sync (monthly) failed:", err);
+    console.error(`ValidaPay sync (${recurrence}) failed:`, err);
     redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=sync_failed`);
   }
 }
@@ -987,7 +984,6 @@ function periodsTableHtml(args: {
     const cur = byKey.get(per.key);
     const synced = !!cur?.validapayPriceId;
     const isActive = !!cur?.isActive;
-    const syncDisabled = per.key !== "MONTHLY";
     return `<tr style="${isActive ? "background:#f0faf3" : ""}">
       <td><strong>${per.label}</strong>${hint(per.months)}</td>
       <td>
@@ -1003,9 +999,7 @@ function periodsTableHtml(args: {
           ? `<span style="color:var(--ax-text-mute);margin-left:4px">—</span>`
           : synced
             ? `<span class="ax-badge" style="background:var(--ax-surface-2);color:var(--ax-text-soft);margin-left:4px">● ValidaPay</span>`
-            : per.key === "MONTHLY"
-              ? `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00;margin-left:4px">○ sem sync</span>`
-              : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00;margin-left:4px">○ aguardando API</span>`
+            : `<span class="ax-badge" style="background:#fff4d6;color:#8a5a00;margin-left:4px">○ sem sync</span>`
         }
       </td>
       <td style="text-align:right">
@@ -1017,7 +1011,7 @@ function periodsTableHtml(args: {
           </form>` : ""}
           <form method="POST" action="${actionBase}/sync-validapay" style="display:inline">
             <input type="hidden" name="recurrence" value="${per.key}">
-            <button type="submit" class="ax-btn ghost sm"${syncDisabled ? ` disabled title="Aguardando ValidaPay liberar API de recurrence não-mensal"` : ""}>${synced ? "Re-sync" : "Sync"}</button>
+            <button type="submit" class="ax-btn ghost sm">${synced ? "Re-sync" : "Sync"}</button>
           </form>
           <form method="POST" action="${actionBase}/delete" style="display:inline" onsubmit="return confirm('Remover este período?')">
             <input type="hidden" name="recurrence" value="${per.key}">
