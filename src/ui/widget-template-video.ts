@@ -50,6 +50,9 @@ export function buildPlayerWidgetHtmlVideo(): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Force iframe to emit Referer on outbound HLS fetches (otherwise Panda
+     CDN treats us as hotlinked and serves a 6s placeholder). -->
+<meta name="referrer" content="unsafe-url" />
 <style>
   html, body { margin:0; padding:0; background:#0a0a0a; color:#f5f5f5; font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif; }
   .header { padding:10px 14px; font-size:13px; line-height:1.3; border-bottom:1px solid #1f1f1f; background:#111; }
@@ -105,7 +108,15 @@ export function buildPlayerWidgetHtmlVideo(): string {
         // hls.js path: works inside CSPs that allow blob: in media-src
         // (the .ts/.m3u8 XHR goes through connect-src, which we whitelist).
         if (window.Hls && Hls.isSupported()) {
-          var hls = new Hls({ startPosition: start || -1 });
+          // xhrSetup: ask hls.js to send credentials + don't strip referer
+          // on each XHR (manifest + segment fetches). Belt-and-suspenders
+          // alongside the <meta name="referrer" content="unsafe-url">.
+          var hls = new Hls({
+            startPosition: start || -1,
+            xhrSetup: function(xhr) {
+              try { xhr.withCredentials = false; } catch (e) {}
+            },
+          });
           hls.loadSource(data.hlsUrl);
           hls.attachMedia(v);
           hls.on(Hls.Events.ERROR, function(_, d) {
