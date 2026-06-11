@@ -24,7 +24,11 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*", // public pricing data; safe to read cross-origin
-    "Cache-Control": "public, max-age=300",
+    // Short TTL: this feed mirrors super-admin price edits, so it must go stale
+    // fast. 60s keeps DB load trivial while edits show within a minute.
+    // NB: behind Cloudflare — a price change still needs an edge purge (or this
+    // TTL to lapse) before it propagates. See memory: askine-cc-behind-cloudflare.
+    "Cache-Control": "public, max-age=60",
   }).end(JSON.stringify(body));
 }
 
