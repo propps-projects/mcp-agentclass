@@ -10,9 +10,8 @@ export default function Nav() {
         display: 'flex', alignItems: 'center', gap: 120, padding: '12px 40px', maxWidth: '100%',
         borderRadius: 999, background: 'rgba(0,0,0,0.03)', border: '1px solid var(--border)',
       }}>
-        <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 20 }}>
-          <span style={{ width: 18, height: 18, borderRadius: '50% 50% 50% 2px', background: '#111', display: 'inline-block' }} />
-          Askine
+        <a href="#" aria-label="Askine" style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <img src="/logo-black.svg" alt="Askine" style={{ height: 18, width: 'auto', display: 'block' }} />
         </a>
         <div className="nav-links" style={{ display: 'flex', gap: 26, fontSize: 16 }}>
           {links.map((l) => (

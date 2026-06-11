@@ -13,9 +13,8 @@ export default function Footer() {
   return (
     <footer className="container" style={{ paddingBlock: 64 }}>
       <div style={{ textAlign: 'center', display: 'grid', gap: 24, justifyItems: 'center' }}>
-        <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 22 }}>
-          <span style={{ width: 18, height: 18, borderRadius: '50% 50% 50% 2px', background: '#111' }} />
-          Askine
+        <a href="#" aria-label="Askine" style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <img src="/logo-black.svg" alt="Askine" style={{ height: 20, width: 'auto', display: 'block' }} />
         </a>
         <div style={{ display: 'flex', gap: 28, color: 'var(--ink-soft)' }}>
           {nav.map((l) => <a key={l.label} href={l.href} style={{ fontWeight: l.strong ? 700 : 400, color: l.strong ? 'var(--ink)' : 'var(--ink-soft)' }}>{l.label}</a>)}
