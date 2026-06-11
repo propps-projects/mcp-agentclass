@@ -760,7 +760,7 @@ export async function handlePublicRoute(
     case "contact":         return legalPage(res, "contact");
     case "about":           return legalPage(res, "about");
     case "logo-svg":        return assetPage(res, LOGO_SVG, "image/svg+xml");
-    case "favicon":         return handleBrandRoute("/brand/favicon.png", res);
+    case "favicon":         return handleBrandRoute("/brand/favicon.ico", res);
     case "og-image":        return assetPage(res, OG_IMAGE_SVG, "image/svg+xml");
     case "home":            return homePage(req, res);
   }

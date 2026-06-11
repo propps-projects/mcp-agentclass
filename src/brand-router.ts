@@ -14,6 +14,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ASSETS_DIR = join(__dirname, "..", "assets");
 
 const ASSET_FILES: Record<string, { file: string; contentType: string }> = {
+  // Real multi-purpose ICO at the canonical /favicon.ico path — this is where
+  // browsers and connector-icon resolvers (Claude) look by default. Registered
+  // here so server-http's early brand-route check serves it before any other
+  // route. /brand/favicon.ico is the same file under the brand namespace.
+  "/favicon.ico":              { file: "favicon.ico",        contentType: "image/x-icon" },
+  "/brand/favicon.ico":        { file: "favicon.ico",        contentType: "image/x-icon" },
   "/brand/favicon.png":        { file: "favicon.png",        contentType: "image/png" },
   "/brand/logo-black.svg":     { file: "logo-black.svg",     contentType: "image/svg+xml" },
   "/brand/logo-white.svg":     { file: "logo-white.svg",     contentType: "image/svg+xml" },
