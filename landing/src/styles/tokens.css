@@ -41,3 +41,9 @@ section { padding-block: clamp(56px, 9vw, 120px); }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* Grids responsivos: seções com 2/3 colunas colapsam para coluna única no mobile */
+@media (max-width: 860px) {
+  .lp-grid-2, .lp-grid-3 { grid-template-columns: 1fr !important; }
+  section { padding-block: clamp(40px, 12vw, 72px); }
+}
