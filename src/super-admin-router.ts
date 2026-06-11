@@ -523,9 +523,19 @@ async function planPriceUpsert(planId: string, req: IncomingMessage, res: Server
   if (!validRecs.includes(recurrence)) {
     return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_invalid`);
   }
+  // Optional 12x installment (only the ANNUAL form sends it). Empty string =
+  // clear (null); a valid positive number = set; field absent = leave as-is.
+  const instRaw = form.get("installment_12x_brl");
+  let installment12xBrl: number | null | undefined;
+  if (instRaw === "") {
+    installment12xBrl = null;
+  } else if (instRaw != null) {
+    const n = Number(instRaw);
+    installment12xBrl = Number.isFinite(n) && n > 0 ? n : undefined;
+  }
   try {
     const { upsertPlanPrice } = await import("./lib/plan-prices.ts");
-    await upsertPlanPrice({ planId, recurrence, amountBrl });
+    await upsertPlanPrice({ planId, recurrence, amountBrl, installment12xBrl });
     redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_saved`);
   } catch (err) {
     console.error("Plan price upsert failed:", err);
@@ -977,7 +987,7 @@ function fmtBrl(n: number): string {
 function periodsTableHtml(args: {
   ownerId: string;
   kind: "plans" | "addons";
-  prices: Array<{ id: string; recurrence: import("./lib/plan-prices.ts").Recurrence; amountBrl: number; isActive: boolean; validapayPriceId: string | null }>;
+  prices: Array<{ id: string; recurrence: import("./lib/plan-prices.ts").Recurrence; amountBrl: number; isActive: boolean; validapayPriceId: string | null; installment12xBrl?: number | null }>;
 }): string {
   const periods: Array<{ key: import("./lib/plan-prices.ts").Recurrence; label: string; months: number }> = [
     { key: "MONTHLY",     label: "Mensal",     months: 1 },
@@ -1013,11 +1023,17 @@ function periodsTableHtml(args: {
     return `<tr style="${isActive ? "background:#f0faf3" : ""}">
       <td><strong>${per.label}</strong>${hint(per.months)}</td>
       <td>
-        <form method="POST" action="${actionBase}" style="display:flex;gap:6px">
+        <form method="POST" action="${actionBase}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <input type="hidden" name="recurrence" value="${per.key}">
           <input name="amount_brl" type="number" step="0.01" value="${cur?.amountBrl ?? ""}" placeholder="0.00" style="width:140px">
+          ${args.kind === "plans" && per.key === "ANNUAL"
+            ? `<input name="installment_12x_brl" type="number" step="0.01" value="${cur?.installment12xBrl ?? ""}" placeholder="12× R$" title="Valor da parcela 12× (com juros) exibido na landing. Você simula o link anual, vê o valor real do ValidaPay e arredonda." style="width:110px">`
+            : ""}
           <button type="submit" class="ax-btn sm">${cur ? "Salvar" : "Definir"}</button>
         </form>
+        ${args.kind === "plans" && per.key === "ANNUAL"
+          ? `<span class="help" style="display:block;font-size:11px;margin-top:3px;color:var(--ax-text-mute)">parcela 12× exibida na landing</span>`
+          : ""}
       </td>
       <td>
         ${isActive ? `<span class="ax-badge" style="background:#e8f5e9;color:#1e6f3e">★ ATIVO</span>` : ""}
@@ -1059,6 +1075,7 @@ function planPricesSectionHtml(
     prices: prices.map((p) => ({
       id: p.id, recurrence: p.recurrence, amountBrl: p.amountBrl,
       isActive: p.isActive, validapayPriceId: p.validapayPriceId,
+      installment12xBrl: p.installment12xBrl,
     })),
   });
 }

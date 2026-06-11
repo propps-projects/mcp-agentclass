@@ -20,6 +20,14 @@ function html(res: ServerResponse, status: number, body: string): void {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" }).end(body);
 }
 
+function json(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*", // public pricing data; safe to read cross-origin
+    "Cache-Control": "public, max-age=300",
+  }).end(JSON.stringify(body));
+}
+
 function redirect(res: ServerResponse, location: string): void {
   res.writeHead(302, { Location: location }).end();
 }
@@ -91,6 +99,35 @@ async function loadPublicPlans(): Promise<PlanPublic[]> {
 async function pricingPage(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   const plans = await loadPublicPlans();
   html(res, 200, pricingHtml(plans));
+}
+
+/**
+ * Public JSON feed of plan prices for the Astro landing (fetched client-side).
+ * Returns monthly + annual amounts and the operator-verified 12x installment
+ * (plan_prices.installment_12x_brl). Capacity stays static on the landing.
+ */
+async function pricingJsonPage(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const plans = await loadPublicPlans();
+  const ids = plans.map((p) => p.id);
+  type AnnualRow = { plan_id: string; amount_brl: string | number; installment_12x_brl: string | number | null };
+  const annualRows = ids.length
+    ? await sb.select<AnnualRow>(
+        "plan_prices",
+        `is_active=is.true&recurrence=eq.ANNUAL&plan_id=in.(${ids.map((id) => encodeURIComponent(id)).join(",")})` +
+          `&select=plan_id,amount_brl,installment_12x_brl`,
+      )
+    : [];
+  const annual = new Map(annualRows.map((r) => [r.plan_id, r]));
+  const out = plans.map((p) => {
+    const a = annual.get(p.id);
+    return {
+      id: p.id,
+      monthly: p.monthly_price_brl,
+      annual: a ? Number(a.amount_brl) : null,
+      installment12x: a?.installment_12x_brl != null ? Number(a.installment_12x_brl) : null,
+    };
+  });
+  json(res, 200, { plans: out });
 }
 
 interface SignupPlan {
@@ -810,6 +847,7 @@ function signupSuccessFallbackHtml(args: { tenant: { slug: string }; email: stri
 
 export type PublicRouteMatch =
   | { type: "pricing" }
+  | { type: "pricing-json" }
   | { type: "signup-get" }
   | { type: "signup-post" }
   | { type: "status" }
@@ -829,6 +867,7 @@ export type PublicRouteMatch =
 export function matchPublicRoute(path: string, method: string): PublicRouteMatch | null {
   const p = path.split("?")[0];
   if (method === "GET"  && p === "/pricing") return { type: "pricing" };
+  if (method === "GET"  && p === "/pricing.json") return { type: "pricing-json" };
   if (method === "GET"  && p === "/signup")  return { type: "signup-get" };
   if (method === "POST" && p === "/signup")  return { type: "signup-post" };
   if (method === "GET"  && p === "/status")  return { type: "status" };
@@ -855,6 +894,7 @@ export async function handlePublicRoute(
 ): Promise<void> {
   switch (match.type) {
     case "pricing":     return pricingPage(req, res);
+    case "pricing-json": return pricingJsonPage(req, res);
     case "signup-get":  return signupGet(req, res);
     case "signup-post": return signupPost(req, res);
     case "status":      return statusPage(req, res);

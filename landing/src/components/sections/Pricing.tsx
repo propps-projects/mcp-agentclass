@@ -1,8 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { reveal, inViewProps } from '../../lib/motion';
 import { plans } from '../../data/pricing';
 import PillButton from '../ui/PillButton';
+
+// Live prices from the app (app/src/public-router.ts → GET /pricing.json).
+// Only the numbers come from the DB; tagline/features/layout stay static here.
+// If the fetch fails (dev, offline), the static values in data/pricing.ts show.
+type DynPrice = { monthly: number | null; annual: number | null; installment12x: number | null };
+const APP_ID: Record<string, string> = { start: 'starter', pro: 'pro', scale: 'scale' };
+const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
 
 function Check({ light }: { light?: boolean }) {
   return (
@@ -21,6 +28,20 @@ function Info({ light }: { light?: boolean }) {
 
 export default function Pricing() {
   const [annual, setAnnual] = useState(false);
+  const [dyn, setDyn] = useState<Record<string, DynPrice>>({});
+
+  useEffect(() => {
+    const url = (import.meta.env.PUBLIC_PRICING_URL as string | undefined) ?? '/pricing.json';
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((data: { plans: Array<{ id: string } & DynPrice> }) => {
+        const m: Record<string, DynPrice> = {};
+        for (const pl of data.plans) m[pl.id] = pl;
+        setDyn(m);
+      })
+      .catch(() => {/* keep static fallback from data/pricing.ts */});
+  }, []);
+
   return (
     <section id="planos" className="container" style={{ textAlign: 'center' }}>
       <motion.h2 variants={reveal} {...inViewProps} style={{ fontSize: 'clamp(30px,4vw,46px)', fontWeight: 600 }}>
@@ -52,6 +73,11 @@ export default function Pricing() {
           const dark = p.variant === 'dark';
           const ink = dark ? '#fff' : 'var(--ink)';
           const soft = dark ? 'rgba(255,255,255,0.6)' : 'var(--ink-soft)';
+          // Dynamic prices override the static strings when /pricing.json loaded.
+          const d = dyn[APP_ID[p.id]];
+          const monthlyPrice = d?.monthly != null ? fmtBRL(d.monthly) : p.mensal.price;
+          const installmentVal = d?.installment12x != null ? fmtBRL(d.installment12x) : p.anual.installment.replace('12x de ', '');
+          const annualFull = d?.annual != null ? `ou ${fmtBRL(d.annual)} à vista` : p.anual.full;
           return (
             <motion.div key={p.id} variants={reveal} {...inViewProps}
               style={{ position: 'relative', borderRadius: 'var(--radius)', padding: 28, color: ink,
@@ -71,14 +97,14 @@ export default function Pricing() {
                 {annual ? (
                   <>
                     <p style={{ color: soft, fontSize: 14 }}>12x de</p>
-                    <p style={{ fontSize: 44, fontWeight: 700, lineHeight: 1 }}>{p.anual.installment.replace('12x de ', '')}</p>
-                    <p style={{ color: soft, fontSize: 14, marginTop: 6 }}>{p.anual.full}</p>
+                    <p style={{ fontSize: 44, fontWeight: 700, lineHeight: 1 }}>{installmentVal}</p>
+                    <p style={{ color: soft, fontSize: 14, marginTop: 6 }}>{annualFull}</p>
                     <p style={{ color: soft, fontSize: 13, marginTop: 8 }}>{p.anual.note}</p>
                   </>
                 ) : (
                   <>
                     <p style={{ fontSize: 44, fontWeight: 700, lineHeight: 1 }}>
-                      {p.mensal.price}<span style={{ fontSize: 16, fontWeight: 400, color: soft }}>/mês</span>
+                      {monthlyPrice}<span style={{ fontSize: 16, fontWeight: 400, color: soft }}>/mês</span>
                     </p>
                     <p style={{ color: soft, fontSize: 13, marginTop: 10 }}>{p.mensal.note}</p>
                   </>

@@ -35,6 +35,9 @@ export interface PlanPrice {
   isActive: boolean;
   validapayProductId: string | null;
   validapayPriceId: string | null;
+  // Operator-verified 12x card installment (interest baked in), shown on the
+  // public landing. Only meaningful on ANNUAL rows. See migration 021.
+  installment12xBrl: number | null;
 }
 
 interface PlanPriceRow {
@@ -45,6 +48,7 @@ interface PlanPriceRow {
   is_active: boolean;
   validapay_product_id: string | null;
   validapay_price_id: string | null;
+  installment_12x_brl: string | number | null;
 }
 
 function map(r: PlanPriceRow): PlanPrice {
@@ -56,6 +60,7 @@ function map(r: PlanPriceRow): PlanPrice {
     isActive: r.is_active,
     validapayProductId: r.validapay_product_id,
     validapayPriceId: r.validapay_price_id,
+    installment12xBrl: r.installment_12x_brl == null ? null : Number(r.installment_12x_brl),
   };
 }
 
@@ -69,21 +74,26 @@ export async function listPlanPrices(planId: string): Promise<PlanPrice[]> {
   return sorted;
 }
 
-/** Upsert by (plan_id, recurrence). Returns the resulting row. */
+/** Upsert by (plan_id, recurrence). Returns the resulting row. Pass
+ *  installment12xBrl (null clears it) to also set the annual 12x display value;
+ *  omit it to leave the existing value untouched on conflict. */
 export async function upsertPlanPrice(args: {
   planId: string;
   recurrence: Recurrence;
   amountBrl: number;
+  installment12xBrl?: number | null;
 }): Promise<PlanPrice> {
   // PostgREST upsert needs on_conflict + Prefer resolution
+  const payload: Record<string, unknown> = {
+    plan_id: args.planId,
+    recurrence: args.recurrence,
+    amount_brl: args.amountBrl,
+    updated_at: new Date().toISOString(),
+  };
+  if (args.installment12xBrl !== undefined) payload.installment_12x_brl = args.installment12xBrl;
   const inserted = await sb.insert<PlanPriceRow>(
     "plan_prices",
-    {
-      plan_id: args.planId,
-      recurrence: args.recurrence,
-      amount_brl: args.amountBrl,
-      updated_at: new Date().toISOString(),
-    },
+    payload,
     { onConflict: "plan_id,recurrence", returning: "representation" },
   );
   return map(inserted[0]);
