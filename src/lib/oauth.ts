@@ -259,7 +259,8 @@ export async function validateAccessToken(token: string): Promise<{
 interface RefreshTokenRow {
   token_hash: string;
   client_id: string;
-  student_id: string;
+  student_id: string | null;
+  mcp_user_id: string | null;
   expires_at: string;
   revoked_at: string | null;
 }
@@ -276,10 +277,16 @@ export async function rotateRefreshToken(refreshToken: string): Promise<IssuedTo
   if (row.revoked_at) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) return null;
 
+  // Carry BOTH identities through rotation. Global (Phase 5+) tokens — which
+  // is what /mcp and /mcp-gpt use — have mcp_user_id set and student_id NULL.
+  // Passing only student_id (null here) with no mcpUserId made issueTokens
+  // throw ("needs either studentId or mcpUserId"), so EVERY refresh failed and
+  // the connector died ~1h after connect (first refresh after access-token TTL).
   const tokens = await issueTokens({
     clientId: row.client_id,
-    studentId: row.student_id,
-    scopes: [],
+    studentId: row.student_id ?? undefined,
+    mcpUserId: row.mcp_user_id ?? undefined,
+    scopes: ["mcp"],
   });
   await sb.update("oauth_refresh_tokens", `token_hash=eq.${encodeURIComponent(oldHash)}`, {
     revoked_at: new Date().toISOString(),
