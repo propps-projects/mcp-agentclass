@@ -29,20 +29,35 @@ body {
   font-weight: 400;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  overflow-x: clip; /* trava scroll horizontal acidental sem quebrar position:sticky */
 }
 h1, h2, h3 { font-family: var(--font); margin: 0; line-height: 1.1; }
 p { margin: 0; }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; }
 img, svg { display: block; max-width: 100%; }
-.container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
-section { padding-block: 130px; }
+.container { max-width: var(--maxw); margin: 0 auto; padding-inline: 24px; }
+section { padding-block: 90px; }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
 
-/* Grids responsivos: seções com 2/3 colunas colapsam para coluna única no mobile */
+/* ---------- Responsivo ---------- */
+
+/* Tablet e abaixo: grids de 2/3 colunas viram coluna única; menos respiro vertical */
 @media (max-width: 860px) {
   .lp-grid-2, .lp-grid-3 { grid-template-columns: 1fr !important; }
+  section { padding-block: 64px; }
+  /* nas linhas do bento, o texto vem antes da imagem no mobile */
+  .lp-feat-media { order: 1; }
+}
+
+/* Celular: padding menor nas laterais e topo/baixo, nav e footer compactam */
+@media (max-width: 560px) {
+  .container { padding-inline: 18px; }
+  section { padding-block: 52px; }
+  .nav-pill { gap: 18px !important; padding: 10px 16px !important; }
+  .nav-pill .nav-links { gap: 16px !important; font-size: 15px !important; }
+  .footer-bottom { flex-direction: column !important; align-items: center !important; text-align: center; gap: 14px !important; }
 }

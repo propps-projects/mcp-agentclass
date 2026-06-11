@@ -22,7 +22,7 @@ export default function Footer() {
         </div>
       </div>
       <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '36px 0' }} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, color: 'var(--ink-soft)', fontSize: 14 }}>
+      <div className="footer-bottom" style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, color: 'var(--ink-soft)', fontSize: 14 }}>
         <span>Copyright © 2026 — Askine LLC. Todos os direitos reservados.</span>
         <div style={{ display: 'flex', gap: 24 }}>
           {legal.map((l) => <a key={l.label} href={l.href}>{l.label}</a>)}

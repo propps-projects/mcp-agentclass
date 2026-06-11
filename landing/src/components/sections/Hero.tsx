@@ -7,7 +7,7 @@ export default function Hero() {
   return (
     <section className="container" style={{ textAlign: 'center' }}>
       <motion.h1 variants={reveal} {...inViewProps}
-        style={{ fontSize: 'clamp(40px, 6vw, 76px)', fontWeight: 700, letterSpacing: '-0.02em', maxWidth: '14ch', margin: '0 auto', lineHeight: 1.08 }}>
+        style={{ fontSize: 'clamp(40px, 5.5vw, 76px)', fontWeight: 700, letterSpacing: '-0.02em', maxWidth: '24ch', margin: '0 auto', lineHeight: 1.08 }}>
         Seu curso dentro do ChatGPT e do Claude em 5 minutos
       </motion.h1>
       <motion.p variants={reveal} {...inViewProps}
@@ -20,7 +20,7 @@ export default function Hero() {
       </motion.div>
       <motion.div variants={reveal} {...inViewProps}
         style={{ marginTop: 64, background: '#f1efe9', borderRadius: 28, padding: 'clamp(20px,4vw,64px)' }}>
-        <Placeholder style={{ minHeight: 460, borderRadius: 18, background: 'var(--surface)' }} />
+        <Placeholder style={{ minHeight: 'clamp(220px, 48vw, 460px)', borderRadius: 18, background: 'var(--surface)' }} />
       </motion.div>
     </section>
   );

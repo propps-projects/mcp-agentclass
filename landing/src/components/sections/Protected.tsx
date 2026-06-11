@@ -31,8 +31,8 @@ export default function Protected() {
       <motion.div variants={stagger} {...inViewProps} className="lp-grid-3"
         style={{ marginTop: 56, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 24, textAlign: 'left' }}>
         {cards.map((c) => (
-          <motion.div key={c.title} variants={staggerItem}>
-            <Card style={{ display: 'grid', gap: 18 }}>
+          <motion.div key={c.title} variants={staggerItem} style={{ height: '100%' }}>
+            <Card style={{ display: 'grid', gap: 18, gridTemplateRows: 'auto auto 1fr', height: '100%' }}>
               <div style={{ aspectRatio: '16 / 10' }}><Placeholder radius="var(--radius-sm)" /></div>
               <h3 style={{ fontSize: 20, fontWeight: 600 }}>{c.title}</h3>
               <p style={{ color: 'var(--ink-soft)', fontSize: 15 }}>{c.body}</p>
