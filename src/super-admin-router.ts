@@ -442,7 +442,17 @@ async function addonPriceDeleteH(addonId: string, req: IncomingMessage, res: Ser
   const form = await readForm(req);
   const recurrence = (form.get("recurrence") ?? "") as import("./lib/plan-prices.ts").Recurrence;
   if (!recurrence) return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_invalid`);
-  const { deleteAddonPrice } = await import("./lib/addon-prices.ts");
+  const { listAddonPrices, deleteAddonPrice } = await import("./lib/addon-prices.ts");
+  // Phase 11.2: same archive-before-delete dance as plan prices.
+  const target = (await listAddonPrices(addonId)).find((p) => p.recurrence === recurrence);
+  if (target?.validapayProductId) {
+    try {
+      const { archiveProduct } = await import("./lib/validapay.ts");
+      await archiveProduct(target.validapayProductId);
+    } catch (err) {
+      console.error(`ValidaPay archiveProduct ${target.validapayProductId} failed:`, err);
+    }
+  }
   await deleteAddonPrice(addonId, recurrence);
   redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=price_deleted`);
 }
@@ -547,7 +557,22 @@ async function planPriceDeleteH(planId: string, req: IncomingMessage, res: Serve
   if (!recurrence) {
     return redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_invalid`);
   }
-  const { deletePlanPrice } = await import("./lib/plan-prices.ts");
+  const { listPlanPrices, deletePlanPrice } = await import("./lib/plan-prices.ts");
+  // Phase 11.2: archive (not delete) the corresponding ValidaPay product
+  // BEFORE we drop the row locally — preserves any active subscriptions
+  // already attached to it. Archive is non-destructive: existing subs keep
+  // billing, but the product becomes invisible for new checkouts.
+  const target = (await listPlanPrices(planId)).find((p) => p.recurrence === recurrence);
+  if (target?.validapayProductId) {
+    try {
+      const { archiveProduct } = await import("./lib/validapay.ts");
+      await archiveProduct(target.validapayProductId);
+    } catch (err) {
+      // Don't block the local delete on ValidaPay archive failure — operator
+      // can re-archive manually from ValidaPay dashboard. Just log + continue.
+      console.error(`ValidaPay archiveProduct ${target.validapayProductId} failed:`, err);
+    }
+  }
   await deletePlanPrice(planId, recurrence);
   redirect(res, `${publicUrl()}/super-admin/plans?tab=${encodeURIComponent(planId)}&msg=price_deleted`);
 }
@@ -795,6 +820,7 @@ function layout(args: {
         { id: "tenants",   label: "Tenants",   href: "/super-admin/tenants",  icon: icons.tenants },
         { id: "plans",     label: "Plans",     href: "/super-admin/plans",    icon: icons.plan },
         { id: "addons",    label: "Add-ons",   href: "/super-admin/addons",   icon: icons.plug },
+        { id: "coupons",   label: "Cupons",    href: "/super-admin/coupons",  icon: icons.plug },
       ],
     }],
     activeId: args.activeNav,
@@ -1160,6 +1186,11 @@ export type SuperAdminRouteMatch =
   | { type: "plan-price-delete"; planId: string }
   | { type: "plan-price-activate"; planId: string }
   | { type: "plan-price-sync"; planId: string }
+  | { type: "coupons-list" }
+  | { type: "coupons-create" }
+  | { type: "coupon-update"; id: string }
+  | { type: "coupon-status"; id: string }
+  | { type: "coupon-delete"; id: string }
   | { type: "logout" };
 
 export function matchSuperAdminRoute(suffix: string, method: string): SuperAdminRouteMatch | null {
@@ -1172,7 +1203,15 @@ export function matchSuperAdminRoute(suffix: string, method: string): SuperAdmin
   if (method === "GET"  && path === "/plans")    return { type: "plans-list" };
   if (method === "GET"  && path === "/addons")   return { type: "addons-list" };
   if (method === "POST" && path === "/addons")   return { type: "addon-create" };
+  if (method === "GET"  && path === "/coupons")  return { type: "coupons-list" };
+  if (method === "POST" && path === "/coupons")  return { type: "coupons-create" };
   if (method === "GET"  && path === "/logout")   return { type: "logout" };
+  const couponUp = path.match(/^\/coupons\/([0-9a-f-]{36})$/i);
+  if (method === "POST" && couponUp) return { type: "coupon-update", id: couponUp[1] };
+  const couponStatus = path.match(/^\/coupons\/([0-9a-f-]{36})\/status$/i);
+  if (method === "POST" && couponStatus) return { type: "coupon-status", id: couponStatus[1] };
+  const couponDel = path.match(/^\/coupons\/([0-9a-f-]{36})\/delete$/i);
+  if (method === "POST" && couponDel) return { type: "coupon-delete", id: couponDel[1] };
   const tenantPlan = path.match(/^\/tenants\/([a-z0-9][a-z0-9-]{0,62})\/plan$/i);
   if (method === "POST" && tenantPlan) return { type: "tenant-plan", slug: tenantPlan[1] };
   const tenantStatus = path.match(/^\/tenants\/([a-z0-9][a-z0-9-]{0,62})\/status$/i);
@@ -1234,8 +1273,238 @@ export async function handleSuperAdminRoute(
     case "addon-price-delete":   return addonPriceDeleteH(match.addonId, req, res);
     case "addon-price-activate": return addonPriceActivate(match.addonId, req, res);
     case "addon-price-sync":     return addonPriceSyncToValidapay(match.addonId, req, res);
+    case "coupons-list":         return couponsList(req, res);
+    case "coupons-create":       return couponCreateH(req, res);
+    case "coupon-update":        return couponUpdateH(match.id, req, res);
+    case "coupon-status":        return couponStatusH(match.id, req, res);
+    case "coupon-delete":        return couponDeleteH(match.id, req, res);
     case "logout":         return logout(req, res);
   }
+}
+
+// ============================================================================
+// Phase 11.3 — Coupons CRUD (super-admin)
+// ============================================================================
+
+async function couponsList(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const { listCouponsLocal } = await import("./lib/coupons.ts");
+  const coupons = await listCouponsLocal();
+  const q = getQuery(req);
+  html(res, 200, layout({
+    title: "Cupons",
+    activeNav: "coupons",
+    session: sess,
+    body: couponsHtml({ coupons, msg: q.get("msg") ?? undefined }),
+  }));
+}
+
+async function couponCreateH(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const code = String(form.get("code") ?? "").trim().toUpperCase();
+  const name = String(form.get("name") ?? "").trim() || null;
+  const discountType = String(form.get("discount_type") ?? "PERCENTAGE") as "PERCENTAGE" | "FIXED";
+  const discountValue = Number(form.get("discount_value") ?? "0");
+  const maxRedemptions = form.get("max_redemptions") ? Number(form.get("max_redemptions")) : undefined;
+  const maxCycles = form.get("max_cycles") ? Number(form.get("max_cycles")) : undefined;
+  const minAmount = form.get("min_amount") ? Number(form.get("min_amount")) : undefined;
+  const validFrom = String(form.get("valid_from") ?? "").trim() || undefined;
+  const validUntil = String(form.get("valid_until") ?? "").trim() || undefined;
+  const appliesTo = String(form.get("applies_to") ?? "ALL") as "RECURRING" | "ONE_TIME" | "ALL";
+  const firstTimeOnly = form.get("first_time_only") === "true";
+  const notes = String(form.get("notes") ?? "").trim() || undefined;
+
+  if (!code || !Number.isFinite(discountValue) || discountValue <= 0) {
+    return redirect(res, `${publicUrl()}/super-admin/coupons?msg=invalid_input`);
+  }
+
+  try {
+    const { createCoupon } = await import("./lib/validapay.ts");
+    const { syncCouponFromValidaPay } = await import("./lib/coupons.ts");
+    const vp = await createCoupon({
+      code, name: name ?? undefined, discountType, discountValue,
+      ...(maxRedemptions ? { maxRedemptions } : {}),
+      ...(maxCycles ? { maxCycles } : {}),
+      ...(minAmount ? { minAmount } : {}),
+      ...(validFrom ? { validFrom } : {}),
+      ...(validUntil ? { validUntil } : {}),
+      appliesTo, firstTimeOnly,
+    });
+    await syncCouponFromValidaPay(vp, notes);
+    redirect(res, `${publicUrl()}/super-admin/coupons?msg=created`);
+  } catch (err) {
+    console.error("Coupon create failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/coupons?msg=create_failed`);
+  }
+}
+
+async function couponUpdateH(id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const { getCouponLocal, syncCouponFromValidaPay } = await import("./lib/coupons.ts");
+  const local = await getCouponLocal(id);
+  if (!local) return redirect(res, `${publicUrl()}/super-admin/coupons?msg=not_found`);
+  const body: { name?: string; maxRedemptions?: number; validUntil?: string } = {};
+  const name = form.get("name");
+  const maxR = form.get("max_redemptions");
+  const validUntil = form.get("valid_until");
+  if (name != null) body.name = String(name);
+  if (maxR) body.maxRedemptions = Number(maxR);
+  if (validUntil) body.validUntil = String(validUntil);
+  try {
+    const { updateCoupon } = await import("./lib/validapay.ts");
+    const vp = await updateCoupon(local.validapayCouponId, body);
+    await syncCouponFromValidaPay(vp);
+    redirect(res, `${publicUrl()}/super-admin/coupons?msg=updated`);
+  } catch (err) {
+    console.error("Coupon update failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/coupons?msg=update_failed`);
+  }
+}
+
+async function couponStatusH(id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const form = await readForm(req);
+  const status = String(form.get("status") ?? "") as "ACTIVE" | "PAUSED" | "INACTIVE";
+  if (!["ACTIVE", "PAUSED", "INACTIVE"].includes(status)) {
+    return redirect(res, `${publicUrl()}/super-admin/coupons?msg=invalid_status`);
+  }
+  const { getCouponLocal, syncCouponFromValidaPay } = await import("./lib/coupons.ts");
+  const local = await getCouponLocal(id);
+  if (!local) return redirect(res, `${publicUrl()}/super-admin/coupons?msg=not_found`);
+  try {
+    const { updateCouponStatus } = await import("./lib/validapay.ts");
+    const vp = await updateCouponStatus(local.validapayCouponId, status);
+    await syncCouponFromValidaPay(vp);
+    redirect(res, `${publicUrl()}/super-admin/coupons?msg=status_changed`);
+  } catch (err) {
+    console.error("Coupon status change failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/coupons?msg=status_failed`);
+  }
+}
+
+async function couponDeleteH(id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sess = await requireSuperAdmin(req, res);
+  if (!sess) return;
+  const { getCouponLocal, deleteCouponLocal } = await import("./lib/coupons.ts");
+  const local = await getCouponLocal(id);
+  if (!local) return redirect(res, `${publicUrl()}/super-admin/coupons?msg=not_found`);
+  try {
+    const { deleteCoupon } = await import("./lib/validapay.ts");
+    await deleteCoupon(local.validapayCouponId);
+    await deleteCouponLocal(id);
+    redirect(res, `${publicUrl()}/super-admin/coupons?msg=deleted`);
+  } catch (err) {
+    console.error("Coupon delete failed:", err);
+    redirect(res, `${publicUrl()}/super-admin/coupons?msg=delete_failed`);
+  }
+}
+
+function couponsHtml(args: {
+  coupons: Array<import("./lib/coupons.ts").Coupon>;
+  msg?: string;
+}): string {
+  const msgs: Record<string, [string, "success" | "error" | "warn"]> = {
+    created: ["Cupom criado.", "success"],
+    updated: ["Cupom atualizado.", "success"],
+    deleted: ["Cupom removido.", "success"],
+    status_changed: ["Status alterado.", "success"],
+    invalid_input: ["Preencha código + tipo + valor.", "error"],
+    invalid_status: ["Status inválido.", "error"],
+    not_found: ["Cupom não encontrado.", "error"],
+    create_failed: ["Falha ao criar no ValidaPay. Veja os logs.", "error"],
+    update_failed: ["Falha ao atualizar. Veja os logs.", "error"],
+    delete_failed: ["Falha ao deletar. Veja os logs.", "error"],
+    status_failed: ["Falha ao mudar status. Veja os logs.", "error"],
+  };
+  const [text, kind] = args.msg ? msgs[args.msg] ?? [args.msg, "error"] : ["", ""];
+
+  const banner = text
+    ? `<div class="msg ${kind}" style="margin-bottom:14px;padding:10px 14px;border-radius:8px;background:${kind === "success" ? "#e8f5e9" : kind === "warn" ? "#fff4d6" : "#fde8e8"};color:${kind === "success" ? "#1e6f3e" : kind === "warn" ? "#8a5a00" : "#b71c1c"}">${esc(text)}</div>`
+    : "";
+
+  const fmtDiscount = (c: import("./lib/coupons.ts").Coupon) =>
+    c.discountType === "PERCENTAGE" ? `${c.discountValue}%` : `R$ ${c.discountValue.toFixed(2)}`;
+  const statusBadge = (s: string) => {
+    const bg = s === "ACTIVE" ? "#e8f5e9" : s === "PAUSED" ? "#fff4d6" : "#eee";
+    const fg = s === "ACTIVE" ? "#1e6f3e" : s === "PAUSED" ? "#8a5a00" : "#666";
+    return `<span class="ax-badge" style="background:${bg};color:${fg}">${s}</span>`;
+  };
+
+  return `
+<h1>Cupons</h1>
+${banner}
+
+<div class="ax-card" style="margin-bottom:20px">
+  <h3 style="margin-top:0">Criar cupom</h3>
+  <form method="POST" action="/super-admin/coupons" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end">
+    <label>Código<input name="code" required placeholder="PROMO10" maxlength="40" style="width:100%;text-transform:uppercase"></label>
+    <label>Nome (interno)<input name="name" placeholder="Promo 10%" maxlength="120" style="width:100%"></label>
+    <label>Tipo
+      <select name="discount_type" style="width:100%">
+        <option value="PERCENTAGE">Percentual</option>
+        <option value="FIXED">Valor fixo (R$)</option>
+      </select>
+    </label>
+    <label>Valor<input name="discount_value" type="number" step="0.01" min="0.01" required placeholder="10" style="width:100%"></label>
+    <label>Max usos<input name="max_redemptions" type="number" min="1" placeholder="∞" style="width:100%"></label>
+    <label>Max ciclos<input name="max_cycles" type="number" min="1" placeholder="∞" style="width:100%"></label>
+    <label>Pedido mínimo R$<input name="min_amount" type="number" step="0.01" min="0" placeholder="0" style="width:100%"></label>
+    <label>Aplica em
+      <select name="applies_to" style="width:100%">
+        <option value="ALL">Tudo</option>
+        <option value="RECURRING">Só recorrência</option>
+        <option value="ONE_TIME">Só avulsa</option>
+      </select>
+    </label>
+    <label>Válido de<input name="valid_from" type="datetime-local" style="width:100%"></label>
+    <label>Válido até<input name="valid_until" type="datetime-local" style="width:100%"></label>
+    <label style="grid-column:1/-1">Notas internas<input name="notes" placeholder="Campanha onde foi usado" style="width:100%"></label>
+    <label><input type="checkbox" name="first_time_only" value="true"> Só primeira compra</label>
+    <button type="submit" class="ax-btn">Criar cupom</button>
+  </form>
+</div>
+
+${args.coupons.length === 0
+  ? `<p class="help">Nenhum cupom cadastrado ainda.</p>`
+  : `<table class="ax-table" style="width:100%;font-size:13px">
+      <tr>
+        <th>Código</th><th>Nome</th><th>Desconto</th><th>Status</th>
+        <th>Usos</th><th>Válido até</th><th style="text-align:right;width:240px">Ações</th>
+      </tr>
+      ${args.coupons.map((c) => `
+        <tr>
+          <td><strong>${esc(c.code)}</strong></td>
+          <td>${esc(c.name ?? "—")}</td>
+          <td>${fmtDiscount(c)}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td>${c.maxRedemptions != null ? `0 / ${c.maxRedemptions}` : "∞"}</td>
+          <td>${c.validUntil ? esc(new Date(c.validUntil).toLocaleDateString("pt-BR")) : "—"}</td>
+          <td style="text-align:right;display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
+            ${c.status === "ACTIVE"
+              ? `<form method="POST" action="/super-admin/coupons/${c.id}/status" style="display:inline">
+                  <input type="hidden" name="status" value="PAUSED">
+                  <button type="submit" class="ax-btn ghost sm">Pausar</button>
+                </form>`
+              : c.status === "PAUSED"
+                ? `<form method="POST" action="/super-admin/coupons/${c.id}/status" style="display:inline">
+                    <input type="hidden" name="status" value="ACTIVE">
+                    <button type="submit" class="ax-btn sm">Reativar</button>
+                  </form>`
+                : `<span style="color:#999;font-size:12px">inativo</span>`}
+            <form method="POST" action="/super-admin/coupons/${c.id}/delete" style="display:inline" onsubmit="return confirm('Deletar cupom ${esc(c.code)}? Cupons com uso não podem ser deletados.')">
+              <button type="submit" class="ax-btn ghost sm" style="color:#dc2626">Deletar</button>
+            </form>
+          </td>
+        </tr>
+      `).join("")}
+    </table>`
+}`;
 }
 
 // Quiet unused-warning — json is exported elsewhere if needed.

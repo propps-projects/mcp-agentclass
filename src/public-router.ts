@@ -100,6 +100,7 @@ async function signupGet(req: IncomingMessage, res: ServerResponse): Promise<voi
     plans,
     selected: q.get("plan") ?? plans[0]?.id ?? "",
     error: q.get("error") ?? undefined,
+    coupon: q.get("coupon") ?? undefined,
   }));
 }
 
@@ -110,6 +111,8 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
   const planId = (form.get("plan") ?? "").trim();
   const documentRaw = (form.get("document") ?? "").replace(/\D+/g, "");
   const slug = slugify(form.get("slug") || name);
+  // Phase 11.3: optional coupon code at signup
+  const couponCodeRaw = (form.get("coupon") ?? "").trim().toUpperCase();
 
   if (!name || !email || !email.includes("@") || !slug || !planId) {
     return redirect(res, `/signup?error=missing_fields&plan=${encodeURIComponent(planId)}`);
@@ -118,9 +121,6 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
     return redirect(res, `/signup?error=bad_document&plan=${encodeURIComponent(planId)}`);
   }
 
-  // Resolve plan + MONTHLY price from plan_prices (the canonical pricing
-  // source as of migration 014). Signup currently only offers the
-  // MONTHLY recurrence; a recurrence selector lands in a later sub-phase.
   const plan = await sb.selectOne<{ id: string; name: string }>(
     "plans", `id=eq.${encodeURIComponent(planId)}&select=id,name`,
   );
@@ -131,7 +131,6 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
     return redirect(res, `/signup?error=plan_not_synced&plan=${encodeURIComponent(planId)}`);
   }
 
-  // Slug must be unique
   const existing = await sb.selectOne<{ id: string }>(
     "tenants",
     `slug=eq.${encodeURIComponent(slug)}&select=id`,
@@ -140,7 +139,33 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
     return redirect(res, `/signup?error=slug_taken&plan=${encodeURIComponent(planId)}`);
   }
 
-  // Create tenant in trial state — checkout completion will flip to active
+  // Phase 11.3: if a coupon was provided, validate against ValidaPay BEFORE
+  // creating the tenant. Invalid coupon = bounce back to /signup with the
+  // typed code preserved so the user can correct it.
+  let validatedCouponCode: string | undefined;
+  let validatedCouponLocalId: string | undefined;
+  if (couponCodeRaw) {
+    try {
+      const { validateCoupon } = await import("./lib/validapay.ts");
+      const { getCouponByCodeLocal } = await import("./lib/coupons.ts");
+      const result = await validateCoupon({
+        code: couponCodeRaw,
+        amount: monthly.amountBrl,
+        chargeType: "RECURRING",
+        customerDocument: documentRaw,
+      });
+      if (!result.valid) {
+        return redirect(res, `/signup?error=coupon_invalid&plan=${encodeURIComponent(planId)}&coupon=${encodeURIComponent(couponCodeRaw)}`);
+      }
+      validatedCouponCode = couponCodeRaw;
+      const localRow = await getCouponByCodeLocal(couponCodeRaw);
+      if (localRow) validatedCouponLocalId = localRow.id;
+    } catch (err) {
+      console.error("Coupon validation failed:", err);
+      return redirect(res, `/signup?error=coupon_invalid&plan=${encodeURIComponent(planId)}&coupon=${encodeURIComponent(couponCodeRaw)}`);
+    }
+  }
+
   const tenantRow = await sb.insert<{ id: string; slug: string }>("tenants", {
     slug,
     name,
@@ -148,19 +173,20 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
     contact_document: documentRaw,
     plan_id: planId,
     status: "trial",
-    // 7-day trial with reduced caps applied via TRIAL_LIMITS in plans.ts
     trial_ends_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    ...(validatedCouponCode ? { coupon_code_at_signup: validatedCouponCode } : {}),
+    ...(validatedCouponLocalId ? { coupon_id_at_signup: validatedCouponLocalId } : {}),
   });
   const tenant = tenantRow[0];
   await inviteAdmin({ tenantId: tenant.id, email, role: "owner" });
 
-  // Create ValidaPay checkout session
   let checkoutUrl: string;
   try {
     const session = await createCheckoutSession({
       priceId: monthly.validapayPriceId,
       customer: { email, documentNumber: documentRaw },
       allowedPaymentMethods: ["pix", "creditcard"],
+      ...(validatedCouponCode ? { couponCode: validatedCouponCode } : {}),
     });
     await sb.update("tenants", `id=eq.${tenant.id}`, {
       validapay_checkout_id: session.id,
@@ -168,8 +194,6 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
     checkoutUrl = session.url;
   } catch (err) {
     console.error("ValidaPay checkout session failed:", err);
-    // Roll back nothing — tenant exists in trial state. Admin can retry
-    // checkout from their admin dashboard later.
     return html(res, 200, signupSuccessFallbackHtml({ tenant, email }));
   }
 
@@ -588,13 +612,14 @@ function pricingHtml(plans: PlanPublic[]): string {
   });
 }
 
-function signupHtml(args: { plans: Array<Pick<PlanPublic, "id" | "name" | "monthly_price_brl" | "validapay_price_id">>; selected: string; error?: string }): string {
+function signupHtml(args: { plans: Array<Pick<PlanPublic, "id" | "name" | "monthly_price_brl" | "validapay_price_id">>; selected: string; error?: string; coupon?: string }): string {
   const errors: Record<string, string> = {
     missing_fields: "Preencha todos os campos.",
     bad_document: "CPF (11 dígitos) ou CNPJ (14 dígitos) inválido.",
     bad_plan: "Plano inválido.",
     plan_not_synced: "Esse plano ainda não está disponível pra checkout. Tente outro.",
     slug_taken: "Esse slug já existe. Escolha outro.",
+    coupon_invalid: "Cupom inválido, expirado ou não aplicável a esse plano.",
   };
   const errMsg = args.error ? errors[args.error] ?? "Erro." : null;
   const usable = args.plans.filter((p) => !!p.validapay_price_id);
@@ -646,6 +671,10 @@ function signupHtml(args: { plans: Array<Pick<PlanPublic, "id" | "name" | "month
     <select name="plan" required>
       ${usable.map((p) => `<option value="${esc(p.id)}"${p.id === args.selected ? " selected" : ""}>${esc(p.name)} — R$ ${Number(p.monthly_price_brl).toFixed(0)}/mês</option>`).join("")}
     </select>
+
+    <label>Cupom <span style="font-weight:400;color:#999;font-size:12px">(opcional)</span></label>
+    <input name="coupon" placeholder="PROMO10" maxlength="40" style="text-transform:uppercase" value="${esc(args.coupon ?? "")}">
+    <div class="help">Tem código promocional? Cole aqui — desconto é aplicado no checkout do ValidaPay.</div>
 
     <button type="submit" class="pub-btn lg">Ir pro checkout →</button>
     <div class="help" style="margin-top:14px;text-align:center">Você será redirecionado pro ValidaPay.</div>
