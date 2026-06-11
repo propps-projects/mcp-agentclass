@@ -5,7 +5,7 @@ import Placeholder from '../ui/Placeholder';
 
 export default function Hero() {
   return (
-    <section className="container" style={{ textAlign: 'center', paddingTop: 64 }}>
+    <section className="container" style={{ textAlign: 'center' }}>
       <motion.h1 variants={reveal} {...inViewProps}
         style={{ fontSize: 'clamp(40px, 6vw, 76px)', fontWeight: 700, letterSpacing: '-0.02em', maxWidth: '14ch', margin: '0 auto', lineHeight: 1.08 }}>
         Seu curso dentro do ChatGPT e do Claude em 5 minutos
