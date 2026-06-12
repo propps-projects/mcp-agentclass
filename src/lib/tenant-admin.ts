@@ -48,6 +48,23 @@ export async function findAdminById(id: string): Promise<TenantAdmin | null> {
   return row ? mapAdmin(row) : null;
 }
 
+/**
+ * Lookup global: todos os tenants em que este e-mail é admin. Usado pelo login
+ * único /entrar (resolve o tenant a partir do e-mail). Embute slug/name do
+ * tenant via FK do PostgREST.
+ */
+export async function listAdminTenantsByEmail(
+  email: string,
+): Promise<{ tenantId: string; slug: string; name: string }[]> {
+  const rows = await sb.select<{ tenant_id: string; tenants: { slug: string; name: string } | null }>(
+    "tenant_admins",
+    `email=eq.${encodeURIComponent(email.toLowerCase())}&select=tenant_id,tenants(slug,name)`,
+  );
+  return rows
+    .filter((r) => r.tenants)
+    .map((r) => ({ tenantId: r.tenant_id, slug: r.tenants!.slug, name: r.tenants!.name }));
+}
+
 export async function inviteAdmin(args: {
   tenantId: string;
   email: string;

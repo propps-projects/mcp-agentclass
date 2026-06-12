@@ -22,6 +22,7 @@ import { matchSuperAdminRoute, handleSuperAdminRoute } from "./super-admin-route
 import { matchPublicRoute, handlePublicRoute } from "./public-router.ts";
 import { isBrandRoute, handleBrandRoute } from "./brand-router.ts";
 import { tryServeLanding } from "./landing-router.ts";
+import { matchEntrarRoute, handleEntrarRoute } from "./entrar-router.ts";
 import { initObservability, captureError } from "./lib/observability.ts";
 
 // Init Sentry before the server starts handling requests so that
@@ -300,6 +301,13 @@ const httpServer = http.createServer(async (req, res) => {
     const pubMatch = matchPublicRoute(req.url, req.method ?? "GET");
     if (pubMatch) {
       await handlePublicRoute(pubMatch, req, res);
+      return;
+    }
+
+    // Login único por e-mail (/entrar, /entrar/verify) — antes do fallback da LP.
+    const entrarMatch = matchEntrarRoute(pathOnlyEarly, req.method ?? "GET");
+    if (entrarMatch) {
+      await handleEntrarRoute(entrarMatch, req, res);
       return;
     }
 

@@ -10,7 +10,7 @@ export default function Hero() {
   return (
     <section className="container" style={{ textAlign: 'center' }}>
       <motion.h1 variants={reveal} {...inViewProps}
-        style={{ fontSize: 'clamp(40px, 5.5vw, 76px)', fontWeight: 700, letterSpacing: '-0.02em', maxWidth: '24ch', margin: '0 auto', lineHeight: 1.08 }}>
+        style={{ fontSize: 'clamp(40px, 5.5vw, 70px)', fontWeight: 700, letterSpacing: '-0.02em', maxWidth: '24ch', margin: '0 auto', lineHeight: 1.08 }}>
         Seu curso dentro do ChatGPT e do Claude em 5 minutos
       </motion.h1>
       <motion.p variants={reveal} {...inViewProps}

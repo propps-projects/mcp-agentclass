@@ -17,7 +17,7 @@ export interface MagicLinkClaims {
   /** Null for super-admin (platform-scoped) magic links. */
   tenantId: string | null;
   email: string;
-  intent: "oauth_login" | "admin_login" | "super_admin_login" | "dashboard";
+  intent: "oauth_login" | "admin_login" | "super_admin_login" | "dashboard" | "entrar";
   /** Resumes the OAuth /authorize flow after click. JSON-encoded; opaque to
    *  the magic-links subsystem. */
   oauthState: string | null;
