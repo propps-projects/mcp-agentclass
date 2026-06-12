@@ -106,29 +106,50 @@ async function pricingPage(_req: IncomingMessage, res: ServerResponse): Promise<
 }
 
 /**
- * Public JSON feed of plan prices for the Astro landing (fetched client-side).
- * Returns monthly + annual amounts and the operator-verified 12x installment
- * (plan_prices.installment_12x_brl). Capacity stays static on the landing.
+ * Public JSON feed for the Astro landing (fetched client-side). Returns, per
+ * public plan: monthly + annual price, the operator-verified 12x installment,
+ * and capacity for BOTH recurrences — `mensal` is the plan base, `anual` is the
+ * base with any per-recurrence override applied (migration 022). The landing
+ * shows the matching set when the Mensal/Anual toggle flips, so an offer like
+ * "double transcription on annual" shows up in the feature list automatically.
  */
 async function pricingJsonPage(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   const plans = await loadPublicPlans();
   const ids = plans.map((p) => p.id);
-  type AnnualRow = { plan_id: string; amount_brl: string | number; installment_12x_brl: string | number | null };
+  type AnnualRow = {
+    plan_id: string; amount_brl: string | number; installment_12x_brl: string | number | null;
+    max_courses_ovr: number | null; transcribe_hours_month_ovr: string | number | null;
+    active_students_month_ovr: number | null; kb_size_bytes_ovr: string | number | null;
+  };
   const annualRows = ids.length
     ? await sb.select<AnnualRow>(
         "plan_prices",
         `is_active=is.true&recurrence=eq.ANNUAL&plan_id=in.(${ids.map((id) => encodeURIComponent(id)).join(",")})` +
-          `&select=plan_id,amount_brl,installment_12x_brl`,
+          `&select=plan_id,amount_brl,installment_12x_brl,max_courses_ovr,transcribe_hours_month_ovr,active_students_month_ovr,kb_size_bytes_ovr`,
       )
     : [];
   const annual = new Map(annualRows.map((r) => [r.plan_id, r]));
+  const num = (v: unknown): number | null => (v == null ? null : Number(v));
   const out = plans.map((p) => {
     const a = annual.get(p.id);
+    const mensal = {
+      cursos: p.max_courses,
+      horas: num(p.transcribe_hours_month),
+      alunos: p.active_students_month,
+      kbBytes: num(p.kb_size_bytes),
+    };
+    const anual = {
+      cursos: a?.max_courses_ovr ?? mensal.cursos,
+      horas: a?.transcribe_hours_month_ovr != null ? Number(a.transcribe_hours_month_ovr) : mensal.horas,
+      alunos: a?.active_students_month_ovr ?? mensal.alunos,
+      kbBytes: a?.kb_size_bytes_ovr != null ? Number(a.kb_size_bytes_ovr) : mensal.kbBytes,
+    };
     return {
       id: p.id,
       monthly: p.monthly_price_brl,
       annual: a ? Number(a.amount_brl) : null,
       installment12x: a?.installment_12x_brl != null ? Number(a.installment_12x_brl) : null,
+      capacity: { mensal, anual },
     };
   });
   json(res, 200, { plans: out });

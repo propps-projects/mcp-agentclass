@@ -4,12 +4,41 @@ import { reveal, inViewProps } from '../../lib/motion';
 import { plans } from '../../data/pricing';
 import PillButton from '../ui/PillButton';
 
-// Live prices from the app (app/src/public-router.ts → GET /pricing.json).
-// Only the numbers come from the DB; tagline/features/layout stay static here.
+// Live prices + capacity from the app (app/src/public-router.ts → GET /pricing.json).
+// Numbers come from the DB; tagline/colors/non-capacity features/layout stay static.
 // If the fetch fails (dev, offline), the static values in data/pricing.ts show.
-type DynPrice = { monthly: number | null; annual: number | null; installment12x: number | null };
+// capacity has one set per recurrence ("anual" already has any override applied),
+// so the feature list switches with the Mensal/Anual toggle.
+type Cap = { cursos: number | null; horas: number | null; alunos: number | null; kbBytes: number | null };
+type DynPrice = {
+  monthly: number | null; annual: number | null; installment12x: number | null;
+  capacity?: { mensal: Cap; anual: Cap };
+};
 const APP_ID: Record<string, string> = { start: 'starter', pro: 'pro', scale: 'scale' };
 const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+const fmtNum = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: n % 1 === 0 ? 0 : 1 });
+
+// Builds the feature label for the 4 capacity rows from DB values, matching the
+// exact wording in data/pricing.ts. Returns null for non-capacity keys (use static).
+function capLabel(key: string, cap: Cap | undefined): string | null {
+  if (!cap) return null;
+  switch (key) {
+    case 'cursos':
+      return cap.cursos == null ? 'Cursos ilimitados'
+        : `${String(cap.cursos).padStart(2, '0')} ${cap.cursos === 1 ? 'curso' : 'cursos'}`;
+    case 'transcricao':
+      return cap.horas == null ? 'Transcrição ilimitada' : `${fmtNum(cap.horas)}h de transcrição/mês`;
+    case 'alunos':
+      return cap.alunos == null ? 'Alunos ilimitados' : `${cap.alunos.toLocaleString('pt-BR')} alunos ativos`;
+    case 'arquivos': {
+      if (cap.kbBytes == null) return 'Armazenamento ilimitado';
+      const mb = cap.kbBytes / 1048576;
+      return mb >= 1024 ? `${fmtNum(mb / 1024)} GB de arquivos` : `${fmtNum(mb)} MB de arquivos`;
+    }
+    default:
+      return null;
+  }
+}
 
 function Check({ light }: { light?: boolean }) {
   return (
@@ -112,13 +141,17 @@ export default function Pricing() {
 
               <p style={{ fontWeight: 600, margin: '20px 0 12px' }}>Incluso no plano:</p>
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 12 }}>
-                {p.features.map((f) => (
-                  <li key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5, color: ink }}>
-                    <Check light={dark} />
-                    <span style={{ flex: 1 }}>{f.label}</span>
-                    <span title={f.tooltip}><Info light={dark} /></span>
-                  </li>
-                ))}
+                {p.features.map((f) => {
+                  const cap = d?.capacity ? (annual ? d.capacity.anual : d.capacity.mensal) : undefined;
+                  const label = capLabel(f.key, cap) ?? f.label;
+                  return (
+                    <li key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5, color: ink }}>
+                      <Check light={dark} />
+                      <span style={{ flex: 1 }}>{label}</span>
+                      <span title={f.tooltip}><Info light={dark} /></span>
+                    </li>
+                  );
+                })}
               </ul>
 
               <div style={{ marginTop: 24 }}>
