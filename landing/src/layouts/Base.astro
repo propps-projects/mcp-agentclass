@@ -4,6 +4,8 @@ import '@fontsource/aleo/600.css';
 import '@fontsource/aleo/700.css';
 import '../styles/tokens.css';
 import CookieConsent from '../components/ui/CookieConsent.tsx';
+import PromoBar from '../components/ui/PromoBar.tsx';
+import Nav from '../components/sections/Nav.tsx';
 
 interface Props { title?: string; description?: string; noindex?: boolean; }
 const {
@@ -38,6 +40,10 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
     <meta name="twitter:image" content={ogImage} />
   </head>
   <body>
+    <header class="lp-header">
+      <PromoBar client:load />
+      <Nav client:load />
+    </header>
     <slot />
     <CookieConsent client:load />
     <script is:inline>

@@ -168,11 +168,23 @@ async function pricingJsonPage(_req: IncomingMessage, res: ServerResponse): Prom
  */
 async function siteConfigJsonPage(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   const { getSettings } = await import("./lib/settings.ts");
-  const s = await getSettings(["analytics_ga4_id", "analytics_meta_pixel_id"]);
+  const s = await getSettings([
+    "analytics_ga4_id", "analytics_meta_pixel_id",
+    "promo_enabled", "promo_text", "promo_bg_color", "promo_font_color",
+    "promo_cta_text", "promo_cta_url",
+  ]);
   json(res, 200, {
     analytics: {
       ga4Id: s.get("analytics_ga4_id") || null,
       metaPixelId: s.get("analytics_meta_pixel_id") || null,
+    },
+    promo: {
+      enabled: s.get("promo_enabled") === "1",
+      text: s.get("promo_text") || "",
+      bgColor: s.get("promo_bg_color") || "#4338ca",
+      fontColor: s.get("promo_font_color") || "#ffffff",
+      ctaText: s.get("promo_cta_text") || "",
+      ctaUrl: s.get("promo_cta_url") || "#",
     },
   });
 }

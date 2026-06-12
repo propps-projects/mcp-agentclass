@@ -235,6 +235,8 @@ async function lpSettingsUpdate(req: IncomingMessage, res: ServerResponse): Prom
     "checkout_success_url", "checkout_failure_url", "checkout_company_name",
     "checkout_primary_color", "checkout_secondary_color", "checkout_font_color",
     "analytics_ga4_id", "analytics_meta_pixel_id",
+    "promo_enabled", "promo_text", "promo_bg_color", "promo_font_color",
+    "promo_cta_text", "promo_cta_url",
   ];
   for (const k of KEYS) {
     const v = form.get(k);
@@ -252,6 +254,8 @@ async function configList(req: IncomingMessage, res: ServerResponse): Promise<vo
     "checkout_success_url", "checkout_failure_url", "checkout_company_name",
     "checkout_primary_color", "checkout_secondary_color", "checkout_font_color",
     "analytics_ga4_id", "analytics_meta_pixel_id",
+    "promo_enabled", "promo_text", "promo_bg_color", "promo_font_color",
+    "promo_cta_text", "promo_cta_url",
   ]);
   const q = getQuery(req);
   html(res, 200, layout({
@@ -1275,6 +1279,31 @@ function configHtml(args: { settings: Map<string, string>; message?: string }): 
 <h1>Config</h1>
 ${msgText ? `<div class="ax-msg ${msgKind}">${esc(msgText)}</div>` : ""}
 <p class="help" style="margin-bottom:18px">Configurações da landing e do checkout. <strong>Planos e preços ficam na aba Plans.</strong></p>
+
+<div class="ax-card" style="margin-bottom:20px;padding:16px 18px">
+  <h3 style="margin:0 0 4px;font-size:13px;color:var(--ax-text-mute);text-transform:uppercase;letter-spacing:0.05em">Faixa de oferta (topo da landing)</h3>
+  <p class="help" style="margin:0 0 12px;font-size:11.5px">Barra de promoção fixa no topo (fixa só no desktop). Use <code>/signup?plan=pro&rec=ANNUAL</code> ou <code>#planos</code> no link do CTA.</p>
+  <form method="POST" action="/super-admin/lp-settings" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;align-items:end">
+    <div><label style="display:block;font-size:12px;color:var(--ax-text-mute);margin-bottom:4px">Faixa</label>
+      <select name="promo_enabled" style="width:100%">
+        <option value="1"${set("promo_enabled") === "1" ? " selected" : ""}>Ligada</option>
+        <option value=""${set("promo_enabled") !== "1" ? " selected" : ""}>Desligada</option>
+      </select></div>
+    <div style="grid-column:1/-1"><label style="display:block;font-size:12px;color:var(--ax-text-mute);margin-bottom:4px">Texto da faixa</label>
+      <input name="promo_text" value="${esc(set("promo_text"))}" maxlength="120" placeholder="50% OFF vitalício no Plano Anual" style="width:100%"></div>
+    <div><label style="display:block;font-size:12px;color:var(--ax-text-mute);margin-bottom:4px">Cor de fundo (hex)</label>
+      <input name="promo_bg_color" value="${esc(set("promo_bg_color", "#4338ca"))}" maxlength="9" placeholder="#4338ca" style="width:100%"></div>
+    <div><label style="display:block;font-size:12px;color:var(--ax-text-mute);margin-bottom:4px">Cor da fonte (hex)</label>
+      <input name="promo_font_color" value="${esc(set("promo_font_color", "#ffffff"))}" maxlength="9" placeholder="#ffffff" style="width:100%"></div>
+    <div><label style="display:block;font-size:12px;color:var(--ax-text-mute);margin-bottom:4px">Texto do CTA</label>
+      <input name="promo_cta_text" value="${esc(set("promo_cta_text"))}" maxlength="40" placeholder="Aproveitar agora" style="width:100%"></div>
+    <div><label style="display:block;font-size:12px;color:var(--ax-text-mute);margin-bottom:4px">Link do CTA</label>
+      <input name="promo_cta_url" value="${esc(set("promo_cta_url"))}" placeholder="/signup?plan=pro&rec=ANNUAL" style="width:100%"></div>
+    <div style="grid-column:1/-1;display:flex;justify-content:flex-end">
+      <button type="submit" class="ax-btn sm">Salvar faixa</button>
+    </div>
+  </form>
+</div>
 
 <div class="ax-card" style="margin-bottom:14px;padding:16px 18px">
   <form method="POST" action="/super-admin/lp-settings" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
