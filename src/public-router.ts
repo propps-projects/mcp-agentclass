@@ -608,8 +608,8 @@ const CSS = `
 const NAV = `
   <nav style="display:flex;justify-content:center;padding:28px 18px 0">
     <div style="display:flex;align-items:center;gap:clamp(24px,8vw,120px);padding:12px 40px;max-width:100%;border-radius:999px;background:rgba(0,0,0,0.03);border:1px solid var(--border)">
-      <a href="/" aria-label="Askine" style="display:inline-flex;align-items:center"><img src="/brand/logo-black.svg" alt="Askine" style="height:18px;width:auto;display:block"></a>
-      <div style="display:flex;gap:26px;font-size:16px">
+      <a href="/" aria-label="Askine" style="display:inline-flex;align-items:center;line-height:0"><img src="/brand/logo-black.svg" alt="Askine" style="height:17px;width:auto;display:block"></a>
+      <div style="display:flex;align-items:center;gap:26px;font-size:16px;line-height:1">
         <a href="/#recursos" class="nav-anchor" style="color:var(--text-soft)">Recursos</a>
         <a href="/#planos" class="nav-anchor" style="color:var(--text-soft)">Planos</a>
         <a href="/entrar" style="font-weight:700;color:var(--text)">Entrar</a>

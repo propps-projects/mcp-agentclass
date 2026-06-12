@@ -10,10 +10,10 @@ export default function Nav() {
         display: 'flex', alignItems: 'center', gap: 120, padding: '12px 40px', maxWidth: '100%',
         borderRadius: 999, background: 'rgba(0,0,0,0.03)', border: '1px solid var(--border)',
       }}>
-        <a href="#" aria-label="Askine" style={{ display: 'inline-flex', alignItems: 'center' }}>
-          <img src="/logo-black.svg" alt="Askine" style={{ height: 18, width: 'auto', display: 'block' }} />
+        <a href="/" aria-label="Askine" style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}>
+          <img src="/logo-black.svg" alt="Askine" style={{ height: 17, width: 'auto', display: 'block' }} />
         </a>
-        <div className="nav-links" style={{ display: 'flex', gap: 26, fontSize: 16 }}>
+        <div className="nav-links" style={{ display: 'flex', alignItems: 'center', gap: 26, fontSize: 16, lineHeight: 1 }}>
           {links.map((l) => (
             <a key={l.label} href={l.href} data-cta={l.cta} className={l.strong ? undefined : 'nav-anchor'}
               style={{ fontWeight: l.strong ? 700 : 400, color: l.strong ? 'var(--ink)' : 'var(--ink-soft)' }}>
