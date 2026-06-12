@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Askine — Simulador de Vendas × Custos × Lucro</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#121826; --panel2:#16203a; --ink:#e8edf6;
+    --muted:#8b97ad; --line:#243049; --accent:#6d8bff; --accent2:#9b6dff;
+    --ok:#3ddc97; --warn:#ffd166; --bad:#ff7a7a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:radial-gradient(1200px 600px at 50% -10%,#1a2236 0%,var(--bg) 60%);
+    color:var(--ink);min-height:100vh;padding:40px 20px}
+  .wrap{max-width:1120px;margin:0 auto}
+  h1{font-size:30px;font-weight:800;letter-spacing:-.02em}
+  h1 span{color:var(--accent)}
+  .sub{color:var(--muted);margin-top:8px;font-size:15px}
+  h2{font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);margin:28px 0 14px;display:flex;align-items:center;gap:10px}
+  .reset{font-size:11px;font-weight:600;color:var(--accent);background:rgba(109,139,255,.12);
+    border:0;padding:5px 11px;border-radius:999px;cursor:pointer;text-transform:none;letter-spacing:0}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+
+  /* Premissas */
+  .premissas{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-end}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field label{font-size:12px;color:var(--muted);font-weight:600}
+  .field input[type=number]{width:120px;background:#0e1422;border:1px solid var(--line);
+    color:var(--ink);border-radius:10px;padding:10px 12px;font-size:15px;font-weight:600}
+  .field input:focus{outline:0;border-color:var(--accent)}
+
+  /* Tier editor cards */
+  .tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  @media(max-width:760px){.tiers{grid-template-columns:1fr}}
+  .tier-card{background:#0e1422;border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .tier-card.pro{border-color:var(--accent)}
+  .tier-card .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .tier-card .name{font-weight:800;font-size:16px}
+  .tier-card .name.pro{color:#a9bbff}
+  .tier-card .pct{font-weight:800;color:var(--accent);font-size:15px}
+  .cfg{display:flex;flex-direction:column;gap:8px;margin-bottom:13px}
+  .cfg label{font-size:12px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .cfgnum{width:96px;background:#121a2c;border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:6px 9px;font-size:13px;font-weight:700;text-align:right}
+  .cfgnum:focus{outline:0;border-color:var(--accent)}
+  .usowrap{border-top:1px solid var(--line);padding-top:11px}
+  .usowrap .lbl{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .tier-card .hint{font-size:11px;color:var(--muted);margin-top:7px}
+
+  /* Table */
+  table{width:100%;border-collapse:collapse;margin-top:6px;font-size:14px}
+  th,td{padding:11px 10px;text-align:right;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;font-weight:700}
+  th:first-child,td:first-child{text-align:left}
+  td.plan{font-weight:700}
+  .tag{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:700}
+  .tag.m{background:rgba(109,139,255,.14);color:#9fb2ff}
+  .tag.a{background:rgba(61,220,151,.14);color:var(--ok)}
+  td input.qty{width:62px;background:#0e1422;border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:7px;font-size:14px;font-weight:700;text-align:center}
+  td input.qty:focus{outline:0;border-color:var(--accent)}
+  .marg{font-weight:700}
+  .pos{color:var(--ok)} .mid{color:var(--warn)} .neg{color:var(--bad)}
+  tr.total td{border-top:2px solid var(--line);border-bottom:0;font-weight:800;font-size:15px;padding-top:14px}
+
+  /* Summary cards */
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:24px}
+  @media(max-width:760px){.cards{grid-template-columns:1fr 1fr}}
+  .kpi{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .kpi.hero{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+  .kpi .k{font-size:12px;color:var(--muted);font-weight:600}
+  .kpi .v{font-size:26px;font-weight:800;margin-top:6px;letter-spacing:-.02em}
+  .kpi .v.ok{color:var(--ok)}
+  .kpi .note{font-size:11px;color:var(--muted);margin-top:4px}
+
+  .foot{color:var(--muted);font-size:12px;margin-top:24px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Askine — Simulador <span>Vendas × Custos × Lucro</span></h1>
+  <p class="sub">Brinque com preços, cotas de horas, uso e nº de assinantes. Tudo recalcula ao vivo — ótimo pra desenhar ofertas.</p>
+
+  <h2>Premissas (ajustáveis)</h2>
+  <div class="panel premissas">
+    <div class="field"><label>Custo transcrição (R$/hora)</label><input type="number" id="custoHora" value="2.16" step="0.01"></div>
+    <div class="field"><label>NF sobre o bruto (%)</label><input type="number" id="nfPct" value="6" step="0.1"></div>
+    <div class="field"><label>Overhead fixo (R$/mês)</label><input type="number" id="overhead" value="200" step="10"></div>
+    <div class="field"><label>PIX à vista (R$, anual)</label><input type="number" id="pixFee" value="0.47" step="0.01"></div>
+  </div>
+
+  <h2>Tiers — preço, cota e uso <button class="reset" id="btnReset">↺ restaurar padrão</button></h2>
+  <div class="tiers" id="tiers"></div>
+
+  <h2>Assinantes por plano · projeção mensal</h2>
+  <div class="panel" style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th>Plano</th><th>Cobrança</th><th>Preço/mês</th><th>Cota/mês</th>
+          <th>Assinantes</th><th>Receita/mês</th><th>Transcrição</th><th>NF</th>
+          <th>Contribuição</th><th>Margem</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+      <tfoot id="foot"></tfoot>
+    </table>
+  </div>
+
+  <div class="cards">
+    <div class="kpi"><div class="k">Receita mensal (MRR-equiv.)</div><div class="v" id="kReceita">—</div><div class="note">soma de todos os planos, normalizada por mês</div></div>
+    <div class="kpi"><div class="k">Custos variáveis/mês</div><div class="v" id="kCustos">—</div><div class="note">transcrição + NF</div></div>
+    <div class="kpi hero"><div class="k">Lucro líquido/mês</div><div class="v ok" id="kLucro">—</div><div class="note" id="kMargem">— de margem · após overhead</div></div>
+    <div class="kpi"><div class="k">Caixa adiantado (anuais)</div><div class="v" id="kCaixa">—</div><div class="note">entra de uma vez no fechamento</div></div>
+  </div>
+
+  <h2>Projeção em 12 meses (LTV mensal + anual)</h2>
+  <div class="cards" style="grid-template-columns:repeat(3,1fr)">
+    <div class="kpi"><div class="k">Faturamento bruto (12 meses)</div><div class="v" id="kFat12">—</div><div class="note">mensais × 12 meses + anuais (preço cheio)</div></div>
+    <div class="kpi"><div class="k">Custos totais (12 meses)</div><div class="v" id="kCusto12">—</div><div class="note">variáveis × 12 + overhead × 12</div></div>
+    <div class="kpi hero"><div class="k">Lucro total (12 meses)</div><div class="v ok" id="kLucro12">—</div><div class="note" id="kLucro12n">após custos e overhead do ano</div></div>
+  </div>
+
+  <p class="foot" id="notas"></p>
+</div>
+
+<script>
+// padrão dos tiers (preço mensal, preço anual TOTAL, cota h/mês, uso %)
+const DEFAULTS = {
+  start: { nome:'Start', pm:147, pa:1470, ct:25, uso:50, qty:[6,4] },
+  pro:   { nome:'Pro',   pm:297, pa:2970, ct:50, uso:50, qty:[2,4] },
+  scale: { nome:'Scale', pm:497, pa:4970, ct:90, uso:50, qty:[1,2] },
+};
+const KEYS = ['start','pro','scale'];
+
+const brl = v => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const margClass = m => m>=70?'pos':(m>=50?'mid':'neg');
+const num = id => +document.getElementById(id).value || 0;
+
+// ----- tier editor cards -----
+const tiersEl = document.getElementById('tiers');
+KEYS.forEach(k=>{
+  const d=DEFAULTS[k]; const isPro=k==='pro';
+  const c=document.createElement('div'); c.className='tier-card'+(isPro?' pro':'');
+  c.innerHTML=`
+    <div class="top"><span class="name${isPro?' pro':''}">${d.nome}</span><span class="pct" id="pct-${k}">${d.uso}%</span></div>
+    <div class="cfg">
+      <label>Preço mensal (R$) <input class="cfgnum" type="number" id="pm-${k}" value="${d.pm}" step="1"></label>
+      <label>Preço anual (R$) <input class="cfgnum" type="number" id="pa-${k}" value="${d.pa}" step="1"></label>
+      <label>Cota transcrição (h/mês) <input class="cfgnum" type="number" id="ct-${k}" value="${d.ct}" step="1"></label>
+    </div>
+    <div class="usowrap">
+      <div class="lbl"><span>Uso médio da cota</span><span id="aulas-${k}"></span></div>
+      <input type="range" min="0" max="100" value="${d.uso}" id="uso-${k}">
+      <div class="hint" id="hint-${k}"></div>
+    </div>`;
+  tiersEl.appendChild(c);
+});
+
+// ----- linhas da tabela -----
+const rowsEl = document.getElementById('rows');
+KEYS.forEach(k=>{
+  const d=DEFAULTS[k];
+  ['mensal','anual'].forEach((b,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td class="plan">${d.nome}</td>
+      <td><span class="tag ${b==='mensal'?'m':'a'}">${b==='mensal'?'Mensal':'Anual'}</span></td>
+      <td id="pr-${k}-${b}">—</td>
+      <td id="co-${k}-${b}">—</td>
+      <td><input class="qty" type="number" min="0" value="${d.qty[i]}" id="q-${k}-${b}"></td>
+      <td id="r-${k}-${b}">—</td>
+      <td id="t-${k}-${b}">—</td>
+      <td id="n-${k}-${b}">—</td>
+      <td id="c-${k}-${b}">—</td>
+      <td class="marg" id="m-${k}-${b}">—</td>`;
+    rowsEl.appendChild(tr);
+  });
+});
+
+function recompute(){
+  const custoHora=num('custoHora'), nfPct=num('nfPct')/100, overhead=num('overhead'), pixFee=num('pixFee');
+  let totReceita=0,totTranscr=0,totNF=0,totContrib=0,totCaixa=0,totSubs=0;
+
+  KEYS.forEach(k=>{
+    const pm=num('pm-'+k), pa=num('pa-'+k), cota=num('ct-'+k);
+    const uso=num('uso-'+k)/100;
+    const anualMes=pa/12;
+    document.getElementById('pct-'+k).textContent=Math.round(uso*100)+'%';
+    document.getElementById('aulas-'+k).textContent=Math.round(cota*uso*3)+' de '+Math.round(cota*3)+' aulas';
+    document.getElementById('hint-'+k).textContent=`${cota}h cheias = ${Math.round(cota*3)} aulas/mês · anual = ${brl(anualMes)}/mês`;
+
+    ['mensal','anual'].forEach(b=>{
+      const preco = b==='mensal'? pm : anualMes;
+      const N=num(`q-${k}-${b}`);
+      const receita=preco*N;
+      const transcr=uso*cota*custoHora*N;
+      const nf=nfPct*receita;
+      const pix = b==='anual' ? (pixFee*N)/12 : 0;
+      const contrib=receita-transcr-nf-pix;
+      const marg=receita>0?(contrib/receita*100):0;
+
+      document.getElementById(`pr-${k}-${b}`).textContent=brl(preco);
+      document.getElementById(`co-${k}-${b}`).textContent=cota+'h';
+      document.getElementById(`r-${k}-${b}`).textContent=brl(receita);
+      document.getElementById(`t-${k}-${b}`).textContent='-'+brl(transcr);
+      document.getElementById(`n-${k}-${b}`).textContent='-'+brl(nf+pix);
+      document.getElementById(`c-${k}-${b}`).textContent=brl(contrib);
+      const mEl=document.getElementById(`m-${k}-${b}`);
+      mEl.textContent = N>0? marg.toFixed(0)+'%' : '—';
+      mEl.className='marg '+(N>0?margClass(marg):'');
+
+      totReceita+=receita; totTranscr+=transcr; totNF+=nf+pix; totContrib+=contrib; totSubs+=N;
+      if(b==='anual') totCaixa+=pa*N;
+    });
+  });
+
+  const lucro=totContrib-overhead;
+  const margMedia=totReceita>0?(lucro/totReceita*100):0;
+
+  document.getElementById('foot').innerHTML=`
+    <tr class="total">
+      <td>Total</td><td></td><td></td><td></td>
+      <td>${totSubs}</td>
+      <td>${brl(totReceita)}</td>
+      <td>-${brl(totTranscr)}</td>
+      <td>-${brl(totNF)}</td>
+      <td>${brl(totContrib)}</td>
+      <td class="marg ${margClass(totReceita>0?totContrib/totReceita*100:0)}">${totReceita>0?(totContrib/totReceita*100).toFixed(0)+'%':'—'}</td>
+    </tr>`;
+
+  document.getElementById('kReceita').textContent=brl(totReceita);
+  document.getElementById('kCustos').textContent=brl(totTranscr+totNF);
+  const lucroEl=document.getElementById('kLucro');
+  lucroEl.textContent=brl(lucro); lucroEl.className='v '+(lucro>=0?'ok':'');
+  document.getElementById('kMargem').textContent=`${margMedia.toFixed(0)}% de margem líquida · após overhead de ${brl(overhead)}`;
+  document.getElementById('kCaixa').textContent=brl(totCaixa);
+
+  // horizonte 12 meses
+  const fat12=totReceita*12, custo12=(totTranscr+totNF)*12+overhead*12, lucro12=fat12-custo12;
+  document.getElementById('kFat12').textContent=brl(fat12);
+  document.getElementById('kCusto12').textContent=brl(custo12);
+  const l12=document.getElementById('kLucro12'); l12.textContent=brl(lucro12); l12.className='v '+(lucro12>=0?'ok':'');
+  document.getElementById('kLucro12n').textContent=`${margMedia.toFixed(0)}% de margem · ${totSubs} assinantes mantidos por 12 meses`;
+
+  document.getElementById('notas').innerHTML=
+    `• <b>Tiers editáveis:</b> mude preço mensal, preço anual e cota de horas pra simular qualquer oferta. A cota anual /mês = preço anual ÷ 12.<br>
+     • <b>Projeção 12 meses:</b> assume retenção de 12 meses (LTV). Faturamento bruto = receita/mês × 12; Lucro total = lucro/mês × 12.<br>
+     • <b>Transcrição</b> = uso% × cota × R$/hora × assinantes (renova todo mês, sem rollover). <b>NF</b> = % sobre o bruto (+ PIX amortizado no anual).<br>
+     • Margem por linha: <span class="pos">verde ≥70%</span> · <span class="mid">amarelo 50–69%</span> · <span class="neg">vermelho &lt;50%</span>. Juros do cartão são repassados ao cliente → não afetam seu lucro.`;
+}
+
+function resetDefaults(){
+  KEYS.forEach(k=>{
+    const d=DEFAULTS[k];
+    document.getElementById('pm-'+k).value=d.pm;
+    document.getElementById('pa-'+k).value=d.pa;
+    document.getElementById('ct-'+k).value=d.ct;
+    document.getElementById('uso-'+k).value=d.uso;
+    document.getElementById('q-'+k+'-mensal').value=d.qty[0];
+    document.getElementById('q-'+k+'-anual').value=d.qty[1];
+  });
+  document.getElementById('custoHora').value=2.16;
+  document.getElementById('nfPct').value=6;
+  document.getElementById('overhead').value=200;
+  document.getElementById('pixFee').value=0.47;
+  recompute();
+}
+
+document.addEventListener('input',e=>{ if(e.target.tagName==='INPUT') recompute(); });
+document.getElementById('btnReset').addEventListener('click',resetDefaults);
+recompute();
+</script>
+</body>
+</html>
