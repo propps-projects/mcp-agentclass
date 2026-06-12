@@ -70,7 +70,7 @@ export default function Pricing() {
         setDyn(m);
         if (typeof data.annualBadge === 'string') setAnnualBadge(data.annualBadge);
       })
-      .catch(() => {/* keep static fallback from data/pricing.ts */});
+      .catch(() => {/* keep static fallback from data/pricing.ts */ });
   }, []);
 
   return (
@@ -83,12 +83,16 @@ export default function Pricing() {
       </motion.p>
 
       {/* Toggle Mensal / Anual */}
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: 5, marginTop: 32,
-        background: 'rgba(0,0,0,0.04)', borderRadius: 999, border: '1px solid var(--border)' }}>
+      <div style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4, padding: 5, marginTop: 32,
+        background: 'rgba(0,0,0,0.04)', borderRadius: 999, border: '1px solid var(--border)'
+      }}>
         {([['Mensal', false], ['Anual', true]] as const).map(([label, val]) => (
           <button key={label} onClick={() => setAnnual(val)}
-            style={{ position: 'relative', border: 'none', background: 'transparent', padding: '8px 18px', borderRadius: 999,
-              display: 'inline-flex', alignItems: 'center', gap: 8, fontWeight: 600, color: annual === val ? 'var(--ink)' : 'var(--ink-soft)' }}>
+            style={{
+              position: 'relative', border: 'none', background: 'transparent', padding: '8px 18px', borderRadius: 999,
+              display: 'inline-flex', alignItems: 'center', gap: 8, fontWeight: 600, color: annual === val ? 'var(--ink)' : 'var(--ink-soft)'
+            }}>
             {annual === val && <motion.span layoutId="toggle-pill" style={{ position: 'absolute', inset: 0, background: '#fff', borderRadius: 999, boxShadow: 'var(--shadow-soft)', zIndex: 0 }} />}
             <span style={{ position: 'relative', zIndex: 1 }}>{label}</span>
             {label === 'Anual' && annualBadge && (
@@ -111,13 +115,17 @@ export default function Pricing() {
           const annualFull = d?.annual != null ? `ou ${fmtBRL(d.annual)} à vista` : p.anual.full;
           return (
             <motion.div key={p.id} variants={reveal} {...inViewProps}
-              style={{ position: 'relative', borderRadius: 'var(--radius)', padding: 28, color: ink,
+              style={{
+                position: 'relative', borderRadius: 'var(--radius)', padding: 28, color: ink,
                 background: dark ? 'var(--dark)' : 'var(--surface)',
-                border: p.variant === 'violet' ? '1.5px solid var(--violet)' : '1px solid var(--border)',
-                boxShadow: 'var(--shadow-soft)' }}>
+                border: p.variant === 'violet' ? '1.5px solid #ff6a32' : '1px solid var(--border)',
+                boxShadow: 'var(--shadow-soft)'
+              }}>
               {p.popular && (
-                <span style={{ position: 'absolute', top: 22, right: 22, fontSize: 12, fontWeight: 700,
-                  color: 'var(--violet)', background: 'var(--violet-soft)', padding: '4px 10px', borderRadius: 999, border: '1px solid var(--violet)' }}>
+                <span style={{
+                  position: 'absolute', top: 22, right: 22, fontSize: 12, fontWeight: 700,
+                  color: '#ff6a32', background: '#ff693232', padding: '4px 10px', borderRadius: 999, border: '1px solid #ff6a32'
+                }}>
                   Mais Popular
                 </span>
               )}
