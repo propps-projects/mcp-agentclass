@@ -36,6 +36,10 @@ function redirect(res: ServerResponse, location: string): void {
   res.writeHead(302, { Location: location }).end();
 }
 
+function redirectPermanent(res: ServerResponse, location: string): void {
+  res.writeHead(301, { Location: location }).end();
+}
+
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
@@ -988,8 +992,10 @@ export async function handlePublicRoute(
     case "docs":        return docsPage(req, res);
     case "enterprise-get":  return enterpriseGet(req, res);
     case "enterprise-post": return enterprisePost(req, res);
-    case "privacy":         return legalPage(res, "privacy");
-    case "terms":           return legalPage(res, "terms");
+    // Texto legal canônico vive na landing (Astro). /privacy e /terms do app
+    // redirecionam pra lá pra não ter dois conteúdos divergentes.
+    case "privacy":         return redirectPermanent(res, "/privacidade");
+    case "terms":           return redirectPermanent(res, "/termos");
     case "contact":         return legalPage(res, "contact");
     case "about":           return legalPage(res, "about");
     case "logo-svg":        return assetPage(res, LOGO_SVG, "image/svg+xml");
