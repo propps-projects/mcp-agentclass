@@ -82,9 +82,13 @@ export async function tryServeLanding(
     if (file) return send(res, file, extname(rel).toLowerCase(), pathOnly, method);
     // pediu um arquivo específico que não existe → 404 do caller
     if (hasExt) return false;
+    // 2) rota sem extensão → página própria (Astro builda como <rota>/index.html,
+    //    ex.: /privacidade → privacidade/index.html). Sem isso, cairia na home.
+    const pageIndex = await readWithin(join(rel, "index.html"));
+    if (pageIndex) return send(res, pageIndex, ".html", pathOnly, method);
   }
 
-  // 2) rota/raiz sem extensão → index.html (single-page)
+  // 3) raiz (ou rota sem página própria) → index.html da home (single-page)
   const index = await readWithin("index.html");
   if (!index) return false; // LP não buildada/copiada
   return send(res, index, ".html", pathOnly, method);
