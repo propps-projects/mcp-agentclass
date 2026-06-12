@@ -4,9 +4,9 @@ const nav = [
   { label: 'Entrar', href: '/entrar', strong: true },
 ];
 const legal = [
-  { label: 'Política de Privacidade', href: '#' },
-  { label: 'Termos de Uso', href: '#' },
-  { label: 'Coockies', href: '#' }, // typo fiel à referência
+  { label: 'Política de Privacidade', href: '/privacidade' },
+  { label: 'Termos de Uso', href: '/termos' },
+  { label: 'Cookies', href: '/cookies' },
 ];
 
 export default function Footer() {
@@ -23,8 +23,16 @@ export default function Footer() {
       <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '36px 0' }} />
       <div className="footer-bottom" style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, color: 'var(--ink-soft)', fontSize: 14 }}>
         <span>Copyright © 2026 — Askine LLC. Todos os direitos reservados.</span>
-        <div style={{ display: 'flex', gap: 24 }}>
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           {legal.map((l) => <a key={l.label} href={l.href} className="nav-anchor">{l.label}</a>)}
+          <button
+            type="button"
+            className="nav-anchor"
+            data-cookie-prefs
+            style={{ border: 0, background: 'transparent', padding: 0, font: 'inherit', color: 'var(--ink-soft)', cursor: 'pointer' }}
+          >
+            Gerenciar cookies
+          </button>
         </div>
       </div>
     </footer>

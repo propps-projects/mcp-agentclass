@@ -3,26 +3,51 @@ import '@fontsource/aleo/400.css';
 import '@fontsource/aleo/600.css';
 import '@fontsource/aleo/700.css';
 import '../styles/tokens.css';
+import CookieConsent from '../components/ui/CookieConsent.tsx';
 
-interface Props { title?: string; description?: string; }
+interface Props { title?: string; description?: string; noindex?: boolean; }
 const {
   title = 'Askine — Seu curso dentro do ChatGPT e do Claude em 5 minutos',
   description = 'Transforme as maiores ferramentas de IA do mundo em um tutor treinado com o seu conteúdo. Sem criar plataforma, sem custo de tokens.',
+  noindex = false,
 } = Astro.props;
+const ogImage = new URL('/og-image.jpg', Astro.site).href;
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
 ---
 <!doctype html>
 <html lang="pt-BR">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="robots" content={noindex ? 'noindex, nofollow' : 'index, follow'} />
     <title>{title}</title>
     <meta name="description" content={description} />
+    <meta property="og:site_name" content="Askine" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
     <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
   </head>
   <body>
     <slot />
+    <CookieConsent client:load />
+    <script is:inline>
+      // Reabre a barra de cookies a partir de qualquer [data-cookie-prefs]
+      // (footer estático + botões das páginas legais), sem hidratar nada.
+      document.addEventListener('click', function (e) {
+        var el = e.target && e.target.closest && e.target.closest('[data-cookie-prefs]');
+        if (el) { e.preventDefault(); window.dispatchEvent(new Event('askine:cookie-prefs')); }
+      });
+    </script>
   </body>
 </html>

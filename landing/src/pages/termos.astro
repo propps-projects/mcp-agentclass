@@ -1,0 +1,120 @@
+---
+import Legal from '../layouts/Legal.astro';
+---
+<Legal
+  title="Termos de Uso"
+  description="Termos e condições de uso da plataforma Askine: trial, planos, integrações de terceiros e responsabilidades."
+>
+  <p>
+    Estes termos regem o uso da plataforma <strong>Askine</strong>, marca operada pela
+    <strong>Askine LLC</strong>. Ao criar uma conta ou usar o serviço, você concorda com estes termos e
+    com a nossa <a href="/privacidade">Política de Privacidade</a>.
+  </p>
+
+  <h2>1. Definições</h2>
+  <ul>
+    <li><strong>Plataforma:</strong> os serviços técnicos da Askine (painel, servidor MCP, transcrição, busca semântica)</li>
+    <li><strong>Infoprodutor:</strong> pessoa física ou jurídica que contrata um plano para servir seu curso pela Askine</li>
+    <li><strong>Aluno:</strong> consumidor final que comprou o curso e acessa o tutor via Claude.ai ou ChatGPT</li>
+    <li><strong>Conteúdo:</strong> vídeos, transcrições, materiais e ativos que o infoprodutor serve pela plataforma</li>
+  </ul>
+
+  <h2>2. Contas e cadastro</h2>
+  <ul>
+    <li>Você precisa ter ao menos 18 anos ou ser representante de pessoa jurídica capaz</li>
+    <li>Os dados de cadastro (e-mail, CPF/CNPJ) devem ser verdadeiros e atualizados</li>
+    <li>Você é responsável por manter o sigilo das suas credenciais de acesso</li>
+  </ul>
+
+  <h2>3. Período de teste (trial)</h2>
+  <ul>
+    <li>Oferecemos um <strong>trial de 7 dias</strong> para você experimentar a plataforma</li>
+    <li>Você pode <strong>cancelar a qualquer momento</strong> pelo painel administrativo, sem multa</li>
+    <li>Se não cancelar, a cobrança do plano escolhido segue as condições contratadas no checkout (mensal ou anual)</li>
+    <li>Direito de arrependimento: reembolso integral em até <strong>7 dias</strong> do primeiro pagamento (CDC, Art. 49)</li>
+  </ul>
+
+  <h2>4. Planos e pagamento</h2>
+  <ul>
+    <li>Os planos e cotas (cursos, horas de transcrição, alunos, armazenamento) estão descritos na página de <a href="/#planos">planos</a> e renovam conforme a recorrência</li>
+    <li>Cobrança via ValidaPay. Inadimplência suspende o serviço; reativação ocorre no próximo pagamento bem-sucedido</li>
+    <li>Cancelamento a qualquer momento no painel, sem multa rescisória</li>
+    <li>No plano anual no cartão, eventuais juros de parcelamento são de responsabilidade do cliente, conforme exibido no checkout</li>
+  </ul>
+
+  <h2>5. Conteúdo do infoprodutor</h2>
+  <ul>
+    <li>Todo conteúdo é e permanece de propriedade do infoprodutor</li>
+    <li>Você concede à Askine licença não exclusiva para processar o conteúdo (transcrever, indexar, servir aos seus alunos) enquanto a conta estiver ativa</li>
+    <li>Você é responsável por possuir os direitos autorais do conteúdo carregado</li>
+    <li>Conteúdo ilegal, fraudulento ou que viole direitos de terceiros é proibido; podemos suspender contas em violação</li>
+  </ul>
+
+  <h2>6. Uso aceitável</h2>
+  <p>É proibido:</p>
+  <ul>
+    <li>Tentar acessar dados de outros infoprodutores ou alunos</li>
+    <li>Engenharia reversa, scraping em massa ou tentativa de burlar cotas</li>
+    <li>Distribuir malware, spam ou phishing</li>
+    <li>Usar a plataforma para atividades ilegais sob a legislação brasileira</li>
+  </ul>
+
+  <h2>7. Integrações de terceiros e dependência de Claude e ChatGPT</h2>
+  <p>
+    O tutor da Askine funciona <strong>dentro</strong> de plataformas de terceiros — notadamente o
+    <strong>Claude.ai (Anthropic)</strong> e o <strong>ChatGPT (OpenAI)</strong> — por meio de conectores
+    (MCP) e demais integrações (Hotmart, Panda Video, ValidaPay, entre outras).
+  </p>
+  <p>
+    <strong>A Askine não tem qualquer responsabilidade por mudanças, descontinuações, indisponibilidades,
+    limitações, políticas, preços ou alterações técnicas que o Claude, o ChatGPT ou qualquer outro
+    terceiro venham a efetuar</strong> em suas integrações, conectores, APIs ou na forma como exibem ou
+    permitem o uso de conectores. Especificamente, a Askine não garante e não se responsabiliza por:
+  </p>
+  <ul>
+    <li>Disponibilidade, manutenção ou continuidade dos conectores no Claude.ai ou no ChatGPT</li>
+    <li>Alterações na interface, nas regras ou nos requisitos dessas plataformas que afetem o acesso ao tutor</li>
+    <li>Suspensões, bloqueios ou mudanças de política impostas por essas plataformas a você ou ao aluno</li>
+    <li>Falhas, lentidão ou indisponibilidade de quaisquer serviços de terceiros (Supabase, OpenAI, Anthropic, Panda Video, Resend, ValidaPay, Hotmart, Google, Meta)</li>
+  </ul>
+  <p>
+    Empregamos esforços razoáveis para adaptar a Askine a essas mudanças quando possível, mas isso está
+    fora do nosso controle e não constitui obrigação contratual de resultado.
+  </p>
+
+  <h2>8. Disponibilidade</h2>
+  <ul>
+    <li>Buscamos alta disponibilidade, mas não garantimos uptime contínuo para planos abaixo de Enterprise</li>
+    <li>Manutenções programadas são comunicadas com antecedência sempre que possível</li>
+    <li>O plano Enterprise pode ter SLA negociado em contrato dedicado</li>
+  </ul>
+
+  <h2>9. Limitação de responsabilidade</h2>
+  <p>A Askine fornece um serviço técnico de orquestração. Não somos responsáveis por:</p>
+  <ul>
+    <li>Conteúdo educacional do infoprodutor (correção, atualidade, qualidade)</li>
+    <li>Relação comercial entre infoprodutor e aluno (vendas, reembolsos, suporte ao aluno)</li>
+    <li>Falhas em serviços de terceiros (vide seção 7)</li>
+    <li>Lucros cessantes ou danos indiretos decorrentes do uso</li>
+  </ul>
+  <p>Nossa responsabilidade total agregada limita-se ao valor pago pelo serviço nos últimos 12 meses.</p>
+
+  <h2>10. Privacidade e proteção de dados</h2>
+  <p>
+    O tratamento de dados pessoais segue a nossa <a href="/privacidade">Política de Privacidade</a>, em
+    conformidade com a LGPD. Em caso de conflito entre estes termos e a política de privacidade, prevalece
+    a política de privacidade para questões de dados pessoais.
+  </p>
+
+  <h2>11. Alterações</h2>
+  <p>
+    Podemos atualizar estes termos. Mudanças materiais são comunicadas com 30 dias de antecedência ao
+    e-mail cadastrado. Continuar usando o serviço após o prazo significa aceitar a nova versão.
+  </p>
+
+  <h2>12. Lei aplicável e foro</h2>
+  <p>
+    Estes termos são regidos pela legislação brasileira. Fica eleito o foro da comarca de domicílio do
+    consumidor para questões consumeristas; nos demais casos, o foro da sede da Askine LLC.
+  </p>
+</Legal>

@@ -157,6 +157,22 @@ async function pricingJsonPage(_req: IncomingMessage, res: ServerResponse): Prom
   json(res, 200, { plans: out, annualBadge });
 }
 
+/**
+ * Public site config for the landing — analytics/pixel IDs read by the cookie
+ * consent component. The landing only injects these scripts AFTER the visitor
+ * accepts cookies (LGPD opt-in). Empty string = that pixel is disabled.
+ */
+async function siteConfigJsonPage(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const { getSettings } = await import("./lib/settings.ts");
+  const s = await getSettings(["analytics_ga4_id", "analytics_meta_pixel_id"]);
+  json(res, 200, {
+    analytics: {
+      ga4Id: s.get("analytics_ga4_id") || null,
+      metaPixelId: s.get("analytics_meta_pixel_id") || null,
+    },
+  });
+}
+
 interface SignupPlan {
   id: string; name: string;
   monthlyAmount: number | null; monthlyPriceId: string | null;
@@ -206,6 +222,10 @@ async function signupPost(req: IncomingMessage, res: ServerResponse): Promise<vo
   }
   if (documentRaw.length !== 11 && documentRaw.length !== 14) {
     return redirect(res, `/signup?error=bad_document&plan=${encodeURIComponent(planId)}`);
+  }
+  // LGPD: explicit consent to Terms + Privacy is required to create the account.
+  if (!form.get("consent")) {
+    return redirect(res, `/signup?error=consent_required&plan=${encodeURIComponent(planId)}`);
   }
 
   const plan = await sb.selectOne<{ id: string; name: string }>(
@@ -621,14 +641,14 @@ function pricingHtml(plans: PlanPublic[]): string {
   const featured = plans.find((p) => p.id === "pro");
   return pageShell({
     title: "Pricing — Askine",
-    description: "Planos da Askine. Trial de 14 dias em qualquer plano. Pague apenas se quiser continuar.",
+    description: "Planos da Askine. Trial de 7 dias em qualquer plano. Pague apenas se quiser continuar.",
     body: `
 <!-- Pricing hero -->
 <section class="pub-section tight" style="padding-top:80px;text-align:center">
   <div class="pub-container narrow">
     <span class="pub-eyebrow">Pricing</span>
     <h1 class="pub-display">Tutor agêntico pro teu curso.<br>Em qualquer tamanho.</h1>
-    <p class="pub-lead pub-lead-center">Cobramos por curso ativo, horas de transcrição e alunos ativos. Trial de 14 dias em qualquer plano. Sem período de carência depois.</p>
+    <p class="pub-lead pub-lead-center">Cobramos por curso ativo, horas de transcrição e alunos ativos. Trial de 7 dias em qualquer plano. Sem período de carência depois.</p>
   </div>
 </section>
 
@@ -720,7 +740,7 @@ function pricingHtml(plans: PlanPublic[]): string {
 <section class="pub-cta-band soft">
   <div class="pub-container narrow">
     <h2>Começa o trial agora.</h2>
-    <p class="pub-lead pub-lead-center">14 dias. Sem cartão.</p>
+    <p class="pub-lead pub-lead-center">7 dias. Sem cartão.</p>
     <div style="display:flex;gap:12px;justify-content:center;margin-top:32px;flex-wrap:wrap">
       <a class="pub-btn lg" href="/signup">Começar agora</a>
       <a class="pub-btn ghost lg" href="/docs">Ver como funciona</a>
@@ -735,6 +755,7 @@ function signupHtml(args: { plans: SignupPlan[]; selected: string; recurrence: "
   const errors: Record<string, string> = {
     missing_fields: "Preencha todos os campos.",
     bad_document: "CPF (11 dígitos) ou CNPJ (14 dígitos) inválido.",
+    consent_required: "Você precisa aceitar os Termos de Uso e a Política de Privacidade.",
     bad_plan: "Plano inválido.",
     plan_not_synced: "Essa combinação de plano e recorrência ainda não está disponível pra checkout. Tente outra.",
     slug_taken: "Esse slug já existe. Escolha outro.",
@@ -773,13 +794,13 @@ function signupHtml(args: { plans: SignupPlan[]; selected: string; recurrence: "
 
   return pageShell({
     title: "Começar — Askine",
-    description: "Trial de 14 dias. Após o trial, cobrança recorrente via PIX ou cartão.",
+    description: "Trial de 7 dias. Após o trial, cobrança recorrente via PIX ou cartão.",
     body: `
 <section class="pub-section">
   <div class="pub-container narrow" style="text-align:center">
     <span class="pub-eyebrow">Começar</span>
     <h1 class="pub-display">Cadastra teu produto em 2 minutos.</h1>
-    <p class="pub-lead pub-lead-center">Trial de 14 dias em qualquer plano. Cobrança via PIX ou cartão começa só depois.</p>
+    <p class="pub-lead pub-lead-center">Trial de 7 dias em qualquer plano. Cobrança via PIX ou cartão começa só depois.</p>
   </div>
 
   <form method="POST" action="/signup" class="pub-form" style="margin-top:40px">
@@ -814,7 +835,17 @@ function signupHtml(args: { plans: SignupPlan[]; selected: string; recurrence: "
     <input name="coupon" placeholder="PROMO10" maxlength="40" style="text-transform:uppercase" value="${esc(args.coupon ?? "")}">
     <div class="help">Tem código promocional? Cole aqui — desconto é aplicado no checkout do ValidaPay.</div>
 
-    <button type="submit" id="su-submit" class="pub-btn lg">Ir pro checkout →</button>
+    <label style="display:flex;gap:10px;align-items:flex-start;margin-top:18px;font-weight:400;cursor:pointer">
+      <input type="checkbox" name="consent" value="1" required style="margin-top:3px;width:16px;height:16px;flex:none">
+      <span style="font-size:13.5px;line-height:1.5;color:#444">
+        Li e aceito os <a href="/termos" target="_blank" rel="noopener">Termos de Uso</a> e a
+        <a href="/privacidade" target="_blank" rel="noopener">Política de Privacidade</a>.
+        Autorizo o uso do meu e-mail para login e comunicações operacionais (link de acesso, pagamento,
+        avisos do serviço). <strong>Não enviamos marketing sem opt-in</strong> e você pode revogar a qualquer momento.
+      </span>
+    </label>
+
+    <button type="submit" id="su-submit" class="pub-btn lg" style="margin-top:16px">Ir pro checkout →</button>
     <div class="help" style="margin-top:14px;text-align:center">Você será redirecionado pro ValidaPay.</div>
   </form>
 
@@ -900,6 +931,7 @@ function signupSuccessFallbackHtml(args: { tenant: { slug: string }; email: stri
 export type PublicRouteMatch =
   | { type: "pricing" }
   | { type: "pricing-json" }
+  | { type: "site-config-json" }
   | { type: "signup-get" }
   | { type: "signup-post" }
   | { type: "status" }
@@ -920,6 +952,7 @@ export function matchPublicRoute(path: string, method: string): PublicRouteMatch
   const p = path.split("?")[0];
   if (method === "GET"  && p === "/pricing") return { type: "pricing" };
   if (method === "GET"  && p === "/pricing.json") return { type: "pricing-json" };
+  if (method === "GET"  && p === "/site-config.json") return { type: "site-config-json" };
   if (method === "GET"  && p === "/signup")  return { type: "signup-get" };
   if (method === "POST" && p === "/signup")  return { type: "signup-post" };
   if (method === "GET"  && p === "/status")  return { type: "status" };
@@ -947,6 +980,7 @@ export async function handlePublicRoute(
   switch (match.type) {
     case "pricing":     return pricingPage(req, res);
     case "pricing-json": return pricingJsonPage(req, res);
+    case "site-config-json": return siteConfigJsonPage(req, res);
     case "signup-get":  return signupGet(req, res);
     case "signup-post": return signupPost(req, res);
     case "status":      return statusPage(req, res);
@@ -1028,7 +1062,7 @@ function homeHtml(): string {
     <h1 class="pub-display">Seu curso virou um tutor agêntico.</h1>
     <p class="pub-lead pub-lead-center">Aluno conversa com Claude.ai e ChatGPT sobre o conteúdo do curso. A IA responde citando aula e timestamp, mostra o vídeo no minuto certo, lembra onde o aluno parou.</p>
     <div class="pub-cta-row">
-      <a class="pub-btn lg" href="/signup">Começar trial 14 dias</a>
+      <a class="pub-btn lg" href="/signup">Começar trial 7 dias</a>
       <a class="pub-btn ghost lg" href="/docs">Ver como funciona →</a>
     </div>
   </div>
@@ -1187,7 +1221,7 @@ function homeHtml(): string {
     <div style="text-align:center;max-width:580px;margin:0 auto">
       <span class="pub-eyebrow">Pricing</span>
       <h3 class="pub-section-title">Planos pra qualquer tamanho de operação.</h3>
-      <p class="pub-lead pub-lead-center">Trial de 14 dias em qualquer plano. Sem período de carência: paga se quiser continuar.</p>
+      <p class="pub-lead pub-lead-center">Trial de 7 dias em qualquer plano. Sem período de carência: paga se quiser continuar.</p>
     </div>
     <div class="pub-plans" style="max-width:920px;margin:48px auto 0">
       <div class="pub-plan">
@@ -1236,7 +1270,7 @@ function homeHtml(): string {
 <section class="pub-cta-band">
   <div class="pub-container narrow">
     <h2>Pronto pra ter um curso que conversa?</h2>
-    <p class="pub-lead pub-lead-center">14 dias de trial. Sem cartão. Cadastra em 2 minutos.</p>
+    <p class="pub-lead pub-lead-center">7 dias de trial. Sem cartão. Cadastra em 2 minutos.</p>
     <div class="pub-cta-row" style="justify-content:center;margin-top:32px;display:flex;gap:12px;flex-wrap:wrap">
       <a class="pub-btn lg" href="/signup">Começar agora</a>
       <a class="pub-btn ghost lg" href="/enterprise">Falar com vendas</a>
@@ -1250,17 +1284,22 @@ function homeHtml(): string {
 // Per-page <head> meta + brand link. Centralized so we don't repeat
 // boilerplate across each route.
 function pageMeta(args: { title: string; description: string }): string {
+  const og = `${publicUrl()}/og-image.jpg`;
   return `
-  <link rel="icon" type="image/png" href="/brand/favicon.png">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" href="/favicon.ico" sizes="any">
   <meta name="description" content="${esc(args.description)}">
+  <meta property="og:site_name" content="Askine">
   <meta property="og:title" content="${esc(args.title)}">
   <meta property="og:description" content="${esc(args.description)}">
-  <meta property="og:image" content="/og-image.svg">
+  <meta property="og:image" content="${og}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${esc(args.title)}">
   <meta name="twitter:description" content="${esc(args.description)}">
-  <meta name="twitter:image" content="/og-image.svg">`;
+  <meta name="twitter:image" content="${og}">`;
 }
 
 // Wraps a body with the full <!doctype html> + <head> + NAV + body + FOOTER.
@@ -1730,7 +1769,7 @@ function docsHtml(base: string): string {
       <h3 class="pub-section-title">Onboarding do infoprodutor</h3>
       <ol style="font-size:16px;line-height:1.7;color:var(--text-soft);padding-left:22px">
         <li><strong>Cadastro</strong> em <code>${eb("/signup")}</code>: nome, slug, email, CPF/CNPJ, plano.</li>
-        <li><strong>Plano + pagamento</strong> via ValidaPay. Trial de 14 dias.</li>
+        <li><strong>Plano + pagamento</strong> via ValidaPay. Trial de 7 dias.</li>
         <li><strong>Integrar Panda Video</strong> em <code>/t/{slug}/admin/integrations</code>.</li>
         <li><strong>Integrar Hotmart</strong>: gera ou cola o Hottok. Webhook URL: <code>${eb("/webhooks/hotmart/{slug}")}</code>.</li>
         <li><strong>Criar curso</strong> em <code>/t/{slug}/admin/courses</code>.</li>

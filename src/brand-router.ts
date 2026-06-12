@@ -20,6 +20,9 @@ const ASSET_FILES: Record<string, { file: string; contentType: string }> = {
   // route. /brand/favicon.ico is the same file under the brand namespace.
   "/favicon.ico":              { file: "favicon.ico",        contentType: "image/x-icon" },
   "/brand/favicon.ico":        { file: "favicon.ico",        contentType: "image/x-icon" },
+  // Social preview (Open Graph / Twitter) image — 1200×630. Served at the
+  // canonical /og-image.jpg for the whole domain (landing + app pages).
+  "/og-image.jpg":             { file: "OGG-IMG.jpg",        contentType: "image/jpeg" },
   "/brand/favicon.png":        { file: "favicon.png",        contentType: "image/png" },
   "/brand/logo-black.svg":     { file: "logo-black.svg",     contentType: "image/svg+xml" },
   "/brand/logo-white.svg":     { file: "logo-white.svg",     contentType: "image/svg+xml" },

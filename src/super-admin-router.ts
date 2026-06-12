@@ -214,6 +214,7 @@ async function plansList(req: IncomingMessage, res: ServerResponse): Promise<voi
     "lp_annual_badge",
     "checkout_success_url", "checkout_failure_url", "checkout_company_name",
     "checkout_primary_color", "checkout_secondary_color", "checkout_font_color",
+    "analytics_ga4_id", "analytics_meta_pixel_id",
   ]);
   const q = getQuery(req);
   html(res, 200, layout({
@@ -241,6 +242,7 @@ async function lpSettingsUpdate(req: IncomingMessage, res: ServerResponse): Prom
     "lp_annual_badge",
     "checkout_success_url", "checkout_failure_url", "checkout_company_name",
     "checkout_primary_color", "checkout_secondary_color", "checkout_font_color",
+    "analytics_ga4_id", "analytics_meta_pixel_id",
   ];
   for (const k of KEYS) {
     const v = form.get(k);
@@ -1277,6 +1279,20 @@ ${msgText ? `<div class="ax-msg ${msgKind}">${esc(msgText)}</div>` : ""}
       <input name="checkout_font_color" value="${esc(set("checkout_font_color"))}" maxlength="9" placeholder="#ffffff" style="width:100%"></div>
     <div style="grid-column:1/-1;display:flex;justify-content:flex-end">
       <button type="submit" class="ax-btn sm">Salvar checkout</button>
+    </div>
+  </form>
+</div>
+
+<div class="ax-card" style="margin-bottom:20px;padding:16px 18px">
+  <h3 style="margin:0 0 4px;font-size:13px;color:var(--ax-text-mute);text-transform:uppercase;letter-spacing:0.05em">Analytics / Pixels (LGPD)</h3>
+  <p class="help" style="margin:0 0 12px;font-size:11.5px">IDs dos rastreadores da landing. <strong>Só carregam depois que o visitante aceita os cookies</strong> (consentimento opt-in). Vazio = pixel desativado.</p>
+  <form method="POST" action="/super-admin/lp-settings" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end">
+    <div><label style="display:block;font-size:12px;color:var(--ax-text-mute);margin-bottom:4px">Google Analytics 4 — Measurement ID</label>
+      <input name="analytics_ga4_id" value="${esc(set("analytics_ga4_id"))}" maxlength="40" placeholder="G-XXXXXXXXXX" style="width:100%"></div>
+    <div><label style="display:block;font-size:12px;color:var(--ax-text-mute);margin-bottom:4px">Meta (Facebook) Pixel ID</label>
+      <input name="analytics_meta_pixel_id" value="${esc(set("analytics_meta_pixel_id"))}" maxlength="40" placeholder="000000000000000" style="width:100%"></div>
+    <div style="grid-column:1/-1;display:flex;justify-content:flex-end">
+      <button type="submit" class="ax-btn sm">Salvar pixels</button>
     </div>
   </form>
 </div>

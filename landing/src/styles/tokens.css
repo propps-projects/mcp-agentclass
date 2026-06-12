@@ -39,6 +39,26 @@ img, svg { display: block; max-width: 100%; }
 .container { max-width: var(--maxw); margin: 0 auto; padding-inline: 24px; }
 section { padding-block: 90px; }
 
+/* ---------- Páginas legais (prosa) ---------- */
+.legal { max-width: 760px; padding-block: clamp(48px, 8vw, 96px); }
+.legal h1 { font-size: clamp(30px, 4vw, 44px); font-weight: 700; }
+.legal h2 { font-size: clamp(20px, 2.6vw, 26px); font-weight: 600; margin: 40px 0 12px; }
+.legal h3 { font-size: 17px; font-weight: 600; margin: 24px 0 8px; }
+.legal p { margin: 12px 0; color: #33332f; }
+.legal ul { margin: 12px 0; padding-left: 22px; display: grid; gap: 8px; }
+.legal li { color: #33332f; }
+.legal a { color: #f3541f; font-weight: 600; }
+.legal a:hover { text-decoration: underline; }
+.legal strong { font-weight: 700; }
+.legal code { background: var(--placeholder); padding: 1px 6px; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 0.9em; }
+.legal table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14.5px; }
+.legal th, .legal td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.legal th { font-weight: 600; }
+.legal-updated { color: var(--ink-soft); font-size: 14px; margin-top: 6px !important; }
+.legal-disclaimer { margin-top: 40px !important; padding-top: 18px; border-top: 1px solid var(--border);
+  color: var(--ink-soft); font-size: 13px; }
+.legal-toc { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 18px 0 8px; font-size: 14px; }
+
 /* Âncoras do nav: underline que desliza da esquerda no hover */
 .nav-anchor { position: relative; transition: color .2s ease; }
 .nav-anchor::after {

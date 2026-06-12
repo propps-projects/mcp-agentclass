@@ -1,0 +1,21 @@
+---
+import Base from './Base.astro';
+import Nav from '../components/sections/Nav.tsx';
+import Footer from '../components/sections/Footer.tsx';
+
+interface Props { title: string; description: string; updated?: string; }
+const { title, description, updated = '12 de junho de 2026' } = Astro.props;
+---
+<Base title={`${title} — Askine`} description={description} noindex={true}>
+  <Nav client:load />
+  <main class="container legal">
+    <h1>{title}</h1>
+    <p class="legal-updated">Última atualização: {updated} · <strong>Askine LLC</strong></p>
+    <slot />
+    <p class="legal-disclaimer">
+      Este documento é informativo e não substitui aconselhamento jurídico.
+      Em caso de dúvida sobre seus direitos, procure um advogado.
+    </p>
+  </main>
+  <Footer />
+</Base>
