@@ -20,7 +20,8 @@
     "hotmart:link": "tsx scripts/cli/link-hotmart-product.ts",
     "oauth:register": "tsx scripts/cli/register-oauth-client.ts",
     "admin:invite": "tsx scripts/cli/invite-admin.ts",
-    "tenant:change-plan": "tsx scripts/cli/change-plan.ts"
+    "tenant:change-plan": "tsx scripts/cli/change-plan.ts",
+    "sync:prices": "tsx scripts/cli/sync-plan-prices.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
