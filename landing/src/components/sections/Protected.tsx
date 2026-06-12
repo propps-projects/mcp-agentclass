@@ -26,7 +26,7 @@ export default function Protected() {
       </motion.h2>
       <motion.p variants={reveal} {...inViewProps} style={{ color: 'var(--ink-soft)', maxWidth: '46ch', margin: '14px auto 0' }}>
         Seus alunos só conectam seu curso dentro do ChatGPT ou Claude, depois de autenticar
-        o e-mail de compra dele.
+        o e-mail de compra.
       </motion.p>
       <motion.div variants={stagger} {...inViewProps} className="lp-grid-3"
         style={{ marginTop: 56, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 24, textAlign: 'left' }}>

@@ -15,7 +15,7 @@ export default function FinalCta() {
         <div style={{ display: 'grid', gap: 22 }}>
           <div><Badge>Experimente Grátis</Badge></div>
           <h2 style={{ fontSize: 'clamp(28px,3.0vw,42px)', fontWeight: 600, maxWidth: '20ch' }}>
-            Transforme seu curso num tutor de IA com ChatGPT e Claude.
+            Transforme o ChatGPT e o Claude no Tutor do seu curso.
           </h2>
           <div><ArrowLink cta="comecar-agora">Começar agora</ArrowLink></div>
         </div>

@@ -8,7 +8,7 @@ const rows = [
   {
     badge: 'Agente Nativo',
     title: 'Um tutor que conhece cada aula e material do seu curso.',
-    body: 'A Askine™ transcreve todas suas aulas e cria todas as instruções necessárias para responder, orientar, conduzir e ensinar com base no seu conteúdo.',
+    body: 'A Askine™ transcreve todas as suas aulas e cria as instruções necessárias para responder, orientar, conduzir e ensinar com base no seu conteúdo.',
   },
   {
     badge: 'Um Lugar Só',
@@ -18,7 +18,7 @@ const rows = [
   {
     badge: 'Aulas Nativas',
     title: 'Suas aulas são assistidas dentro do ChatGPT e Claude',
-    body: 'Mais que conversar: a Askine™ traz a aula para ser assistido dentro do ChatGPT e do Claude. Seu aluno assiste e tira dúvidas no mesmo lugar.',
+    body: 'Mais que conversar: a Askine™ traz a aula para ser assistida dentro do ChatGPT e do Claude. Seu aluno assiste e tira dúvidas no mesmo lugar.',
   },
   {
     badge: 'Sem Custo Extra',
