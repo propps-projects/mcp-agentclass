@@ -17,7 +17,7 @@ import { listPlans } from "../../src/lib/plans.ts";
 import { listPlanPrices, updatePlanPriceValidapay } from "../../src/lib/plan-prices.ts";
 import { listAddons } from "../../src/lib/addons.ts";
 import { listAddonPrices, updateAddonPriceValidapay } from "../../src/lib/addon-prices.ts";
-import { createProductWithPrice } from "../../src/lib/validapay.ts";
+import { createProductWithPrice, standardPriceDescription } from "../../src/lib/validapay.ts";
 
 const args = process.argv.slice(2);
 const DRY = args.includes("--dry-run");
@@ -81,6 +81,7 @@ async function main() {
           recurrence: p.recurrence,
           amountBrl: p.amountBrl,
           externalId: ext(addon.id, p.recurrence),
+          priceDescription: standardPriceDescription(addon.name, p.recurrence, "addon"),
         });
         const priceId = product.prices[0]?.priceId ?? null;
         await updateAddonPriceValidapay({

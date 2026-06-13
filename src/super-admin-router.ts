@@ -435,7 +435,7 @@ async function addonSyncToValidapay(id: string, req: IncomingMessage, res: Serve
   // Phase 11.0: any of the four recurrences syncs cleanly via
   // createProductWithPrice (VP_RECURRENCE handles the name translation).
   try {
-    const { createProductWithPrice } = await import("./lib/validapay.ts");
+    const { createProductWithPrice, standardPriceDescription } = await import("./lib/validapay.ts");
     const product = await createProductWithPrice({
       name: `Askine — ${addon.name}`,
       description: addon.description ?? addon.name,
@@ -443,6 +443,7 @@ async function addonSyncToValidapay(id: string, req: IncomingMessage, res: Serve
       recurrence: activePrice.recurrence,
       amountBrl: activePrice.amountBrl,
       externalId: `addon_${addon.id}`,
+      priceDescription: standardPriceDescription(addon.name, activePrice.recurrence, "addon"),
     });
     const priceId = product.prices[0]?.priceId ?? null;
     await updateAddonPriceValidapay({
@@ -529,7 +530,7 @@ async function addonPriceSyncToValidapay(addonId: string, req: IncomingMessage, 
   const target = prices.find((p) => p.recurrence === recurrence);
   if (!target) return redirect(res, `${publicUrl()}/super-admin/addons?tab=${encodeURIComponent(addonId)}&msg=sync_needs_price`);
   try {
-    const { createProductWithPrice } = await import("./lib/validapay.ts");
+    const { createProductWithPrice, standardPriceDescription } = await import("./lib/validapay.ts");
     const product = await createProductWithPrice({
       name: `Askine — ${addon.name}`,
       description: addon.description ?? addon.name,
@@ -537,6 +538,7 @@ async function addonPriceSyncToValidapay(addonId: string, req: IncomingMessage, 
       recurrence,
       amountBrl: target.amountBrl,
       externalId: `addon_${addon.id}_${recurrence.toLowerCase()}`,
+      priceDescription: standardPriceDescription(addon.name, recurrence, "addon"),
     });
     const priceId = product.prices[0]?.priceId ?? null;
     await updateAddonPriceValidapay({

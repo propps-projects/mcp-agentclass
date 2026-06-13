@@ -167,6 +167,20 @@ export interface CreatedProduct {
 }
 
 /**
+ * Frase padrão exibida como descrição do item no checkout da ValidaPay.
+ * Ex.: "Você está adquirindo o Plano Start com periodicidade mensal da Askine™."
+ * `kind` controla o substantivo ("Plano" para planos, "adicional" para add-ons).
+ */
+export function standardPriceDescription(
+  displayName: string,
+  recurrence: Recurrence,
+  kind: "plan" | "addon" = "plan",
+): string {
+  const noun = kind === "addon" ? "adicional" : "Plano";
+  return `Você está adquirindo o ${noun} ${displayName} com periodicidade ${labelForRecurrence(recurrence)} da Askine™.`;
+}
+
+/**
  * Phase 11: generalized product creation. Used for plans + addons across
  * all four recurrences. Back-compat helper `createProductWithMonthlyPrice`
  * is kept as a thin wrapper that callers can migrate off of incrementally.
@@ -179,16 +193,25 @@ export async function createProductWithPrice(args: {
   amountBrl: number;
   trialDays?: number;
   externalId?: string;
+  /** Linha cinza de descrição do item no checkout. Default: frase padrão de plano. */
+  priceDescription?: string;
 }): Promise<CreatedProduct> {
   const label = labelForRecurrence(args.recurrence);
+  // O checkout da ValidaPay já exibe "{nome do produto} - {título do preço}".
+  // Por isso o título carrega só a recorrência (ex.: "Mensal"), evitando repetir
+  // o nome do plano. A descrição do preço usa a frase padrão (override via
+  // priceDescription — usado pelos add-ons pra trocar "Plano" por "adicional").
+  const priceTitle = label.charAt(0).toUpperCase() + label.slice(1);
+  const priceDescription = args.priceDescription
+    ?? standardPriceDescription(args.name, args.recurrence);
   return api<CreatedProduct>("POST", "/v1/products", {
     name: args.name,
     description: args.description,
     statementDescriptor: args.statementDescriptor,
     metadata: args.externalId ? { externalId: args.externalId } : undefined,
     prices: [{
-      title: `${args.name} ${label}`,
-      description: args.name,
+      title: priceTitle,
+      description: priceDescription,
       recurrenceType: VP_RECURRENCE[args.recurrence],
       amount: args.amountBrl,
       ...(args.trialDays ? { trialDays: args.trialDays } : {}),
